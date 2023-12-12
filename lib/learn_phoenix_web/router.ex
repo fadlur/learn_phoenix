@@ -20,15 +20,37 @@ defmodule LearnPhoenixWeb.Router do
 
     get "/", PageController, :home
     get "/hello", HelloController, :index
-    resources "/users", UserController
-    resources "/posts", PostController, only: [:index, :show]
+    # resources "/users", UserController
+    # resources "/posts", PostController, only: [:index, :show]
     resources "/comments", CommentController, except: [:delete]
+
+    resources "/users", UserController do
+      resources "/posts", PostController
+    end
+  end
+
+  scope "/admin", LearnPhoenixWeb.Admin do
+    pipe_through :browser
+
+    resources "/images", ImageController
+    resources "/reviews", ReviewController
+    resources "/users", UserController
   end
 
   # Other scopes may use custom stacks.
   # scope "/api", LearnPhoenixWeb do
   #   pipe_through :api
   # end
+
+  scope "/api", LearnPhoenixWeb.Api, as: :api do
+    pipe_through :api
+
+    scope "/v1", V1, as: :v1 do
+      resources "/images", ImageController
+      resources "/reviews", ReviewController
+      resources "/users", UserController
+    end
+  end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
   if Application.compile_env(:learn_phoenix, :dev_routes) do
