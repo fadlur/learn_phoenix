@@ -68,4 +68,8 @@ defmodule LearnPhoenixWeb.Router do
       forward "/mailbox", Plug.Swoosh.MailboxPreview
     end
   end
+
+  pipeline :auth do
+    plug LearnPhoenixWeb.Authentication
+  end
 end

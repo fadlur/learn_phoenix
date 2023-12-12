@@ -404,3 +404,217 @@ Kalau kita menduplikasi sebuah route yang berarti 2 route mempunyai path yang sa
 warning: this clause cannot match because a previous clause at line 16 always matches
 
 ```
+
+**pipeline**
+Udah sejauh ini tapi kita belum membahas apapun tentang satu dari baris pertama kode yang kita lihat di router `:pipe_through :browser`. Sekarang saatnya.
+
+Pipeline adalah serangkaian plug yang dapat dilampirkan di spesific scopes.
+
+Routes didefinisikan di dalam scope dan scope mungkin mengalir (pipe) melewati banyak pipeline. Sekali saja route cocok, Phoenix akan memanggil semua plug yand didefinisikan di dalam semua pipeline yang diasosiasikan ke route tersebut. Sebagai contoh, mengakses `/` akan _pipe through_ `:browser` pipeline, akibatnya akan memanggil semua plug-nya.
+
+Phoenix mendefinisikan 2 pipeline by default, `:browser` dan `:api`, yang dapat digunakan untuk sejumlah tugas umum. Pada gilirannya, kita dapat mengcustom mereka seperti membuat pipeline baru yang sesuai kebutuhan kita.
+
+**The `:browser` and `:api` pipelines**
+
+Sesuai namanya, `:browser` pipeline mempersiapkan route yang merender request untuk sebuah browser, and `:api` pipeline mempersiapkan untuk route yang memproduksi data untuk sebuah API.
+
+`:browser` pipeline mempunyai 6 plug:
+
+1. `plug :accepts, ["html"]` mendefinisikan request format atau format yang diterima.
+2. `:fetch_session` yang secara alami, mengambil data session dan mambuatnya tersedia di koneksi.
+3. `:fetch_live_flash` yang mengambil flash message apapun dari LiveView dan menggabungkan mereka dengan controller flash message. Kemudian,
+4. `:put_root_layout` akan menyimpan root layout untuk tujuan rendering
+5. `:protect_from_forgery` dan
+6. `put_secure_browser_headers` melindungi form post dari cross-site forgery
+
+Saat ini, `:api` pipeline hanya mendefinisikan `plug :accepts, ["json"]`
+
+router memanggil pipeline di sebuah route yang didefinisikan di dalam sebuah scope. Route di luar scope tidak memiliki pipelines. Meskipun penggunaan nested scope tidak disarankan (lihat contoh versioned API), jika kita memanggil pipe_through di dalam nested scope, router akan memanggil semua pipe_through dari parent scope, diikuti oleh nested scope.
+
+Itu adalah banyak kata yang mbulet, sekarang mari kita uraikan saja maksudnya.
+
+Berikut tampilan lain dari router yang digenerate oleh Phoenix apps, kali ini dengan `/api` scope diuncomment dan sebuah route ditambahkan.
+
+```elixir
+defmodule LearnPhoenixWeb.Router do
+  use LearnPhoenixWeb, :router
+
+  pipeline :browser do
+    plug :accepts, ["html"]
+    plug :fetch_session
+    plug :fetch_live_flash
+    plug :put_root_layout, html: {LearnPhoenixWeb.Layouts, :root}
+    plug :protect_from_forgery
+    plug :put_secure_browser_headers
+  end
+
+  pipeline :api do
+    plug :accepts, ["json"]
+  end
+
+  scope "/", LearnPhoenixWeb do
+    pipe_through :browser
+
+    get "/", PageController, :home
+  end
+
+  # Other scopes may use custom stacks.
+  scope "/api", LearnPhoenixWeb do
+    pipe_through :api
+
+    resources "/reviews", ReviewController
+  end
+  # ...
+end
+```
+
+ketika server menerima sebuah request, request akan selalu pertama kali melewati plug di endpoint, setelah itu akan mencoba untuk mencocokan path dan HTTP verb.
+
+Katakanlah request itu cocok dengan route pertama: sebuah GET ke `/`. router akan pertama pipe request itu melalui `:browser` pipeline yang akan mengambil data session, mengambil flash dan menjalankan forgery protection - sebelum dikirimkan ke `home` action di `PageController`
+
+Sebaliknya, misal request tidak ada yang cocok dengan macro `resources/2`. Pada kasus itu, router akan pipe (menyalurkan) ke `:api` pipeline yang saat ini hanya menjalankan negosiasi konten - sebelum mengirimkan lebih lanjut ke action yang benar di `LearnPhoenixWeb.ReviewController`.
+
+Jika tidak ada route yang cocok, tidak ada pipeline yang dipanggil maka error 404 akan muncul.
+
+**Creating new pipelines**
+Phoenix mengijinkan kita untuk membuat pipeline custom sendiri di manapun di router. Untuk melakukan itu, kita panggil macro `pipeline/2` dengan argument berikut: sebuah atom untuk nama pipeline baru kita dan sebuah blok dengan semua plug yang kita inginkan di dalamnya.
+
+```elixir
+defmodule LearnPhoenixWeb.Router do
+  use LearnPhoenixWeb, :router
+
+  pipeline :browser do
+    plug :accepts, ["html"]
+    plug :fetch_session
+    plug :fetch_live_flash
+    plug :put_root_layout, html: {LearnPhoenixWeb.Layouts, :root}
+    plug :protect_from_forgery
+    plug :put_secure_browser_headers
+  end
+
+  pipeline :auth do
+    plug LearnPhoenixWeb.Authentication
+  end
+
+  scope "/reviews", LearnPhoenixWeb do
+    pipe_through [:browser, :auth]
+
+    resources "/", ReviewController
+  end
+end
+```
+
+Kode di atas mengasumsikan ada sebuah plug dengan nama `LearnPhoenixWeb.Authentication` yang menjalankan otentikasi dan sekarang menjadi bagian dari `:auth` pipeline.
+
+Perhatikan bahwa pipeline sendiri adalah plug, jadi kita dapat plug sebuah pipeline di dalam pipeline lainnya. Sebagai contoh, kita dapat menulis ulang `auth` pipeline di atas untuk secara otomatis memanggil `browser`, menyederhanakan downstream pipeline call:
+
+```elixir
+  pipeline :auth do
+    plug :browser
+    plug :ensure_authenticated_user
+    plug :ensure_user_owns_review
+  end
+
+  scope "/reviews", LearnPhoenixWeb do
+    pipe_through :auth
+
+    resources "/", ReviewController
+  end
+```
+
+**How to organize my routes**
+
+Di phoenix, kita kadang mendefinisikan beberapa pipeline, yang menyediakan spesifik functionality. Sebagai contoh, `:browser` dan `:api` pipeline dimaksudkan untuk diakses oleh spesifik klien, browser dan http client.
+
+Mungkin lebih penting lagi, sangat umum untuk mendefinisikan pipeline khusus untuk otentikasi dan otorisasi. Sebagai contoh, kamu mungkin mempunyai sebuah pipeline yang membutuhkan semua user harus diotentikasi. Pipeline lainnya mungkin memaksa hanya admin user dapat mengakses route tertentu.
+
+Sekali pipeline didefinisikan, kamu akan menggunakan ulang (reuse) pipeline di scope yang diinginkan, mengelompokkan routemu di sekitar pipeline mereka. Sebagai contoh, kembali ke contoh review kita. katakanlah seseorang dapat membaca sebuah review, tapi hanya user yang diotentikasi dapat membuatnya. Routemu akan terlihat seperti berikut:
+
+```elixir
+pipeline :browser do
+  ...
+end
+
+pipeline :auth do
+  plug LearnPhoenixWeb.Authentication
+end
+
+scope "/" do
+  pipe_through [:browser]
+
+  get "/reviews", PostController, :index
+  get "/reviews/:id", PostController, :show
+end
+
+scope "/" do
+  pipe_through [:browser, :auth]
+
+  get "/reviews/new", PostController, :new
+  post "/reviews", PostController, :create
+end
+```
+
+Perhatikan, bagaimana route di atas dipisah menjadi beberapa scope. Mungkin pemisahan dapat membingungkan di awal, itu memiliki banyak manfaat: itu sangat mudah untuk menginspect route-mu dan melihat semua route yang ada. Sebagai contoh, membutuhkan otentikasi dan yang satu tidak. Ini membantu untuk auditing dan memastikan route-mu mempunyai scope yang proper.
+
+Kamu dapat membaut beberapa atau sebanyak mungkin scope yang kamu mau. Karena pipeline dapat direuse di semua scope, mereka membantu merangkum fungsionalitas umum dan anda dapat menyusunnya seperlunya pada setiap scope yang ditentukan.
+
+**Forward**
+
+macro `Phoenix.Router.forward/4` dapat digunakan untuk mengirim semua request yang diawali dengan sebuah path khusus ke plug khusus. katakanlah kita mempunyai bagian dari sistem kita yang bertanggungjawab (bisa jadi jadi library atau aplikasi terpisah) untuk menjalankan jobs di background, itu bisa memiliki interface web sendiri untuk mengecek status dari jobs. Kita dapat meneruskan ke interface admin menggunakan:
+
+```elixir
+defmodule LearnPhoenixWeb.Router do
+  use LearnPhoenixWeb, :router
+
+  ...
+
+  scope "/", LearnPhoenixWeb do
+    ...
+  end
+
+  forward "/jobs", BackgroundJob.Plug
+end
+```
+
+Ini berarti semua route yang diawali dengan `/jobs` akan dikirim ke modul `LearnPhoenixWeb.BackgroundJob.Plug`. Di dalam plug, kamu dapat mencocokkan pada subroute, seperti `/pending` dan `/active` yang menunjukkan status dari job tertentu.
+
+Kita bahkan dapat mencampur macro `forward/4` dengan pipeline, Jika kita ingin memastikan bahwa user sudah diotentikasi dan seorang administrator diperintah untuk melihat halaman jobs, kita dapat menggunakan ini di router kita.
+
+```elixir
+defmodule LearnPhoenixWeb.Router do
+  use LearnPhoenixWeb, :router
+
+  ...
+
+  scope "/", LearnPhoenixWeb do
+    ...
+  end
+
+  scope "/" do
+    pipe_through [:authenticate_user, :ensure_admin]
+    forward "/jobs", BackgroundJob.Plug
+  end
+end
+```
+
+Ini berarti plug di pipeline `:authenticate_user` dan `:ensure_admin` akan dipanggil sebelum `BackgroundJob.Plug` mengijinkan mereka untuk mengirim response yang benar dan halt (menghentikan) request yang sesuai.
+
+`opts` yang diterima di callback `init/1` dari module Plug dapat diteruskan sebagai argument ketiga. sebagai contoh, mungkin background job mengijinkan kamu mengatur nama dari aplikasi untuk ditampilkan di halaman. Ini dapat diteruskan dengan:
+
+```elixir
+forward "/jobs", BackgroundJob.Plug, name: "Hello phoenix"
+```
+
+Ada argument keempat `router.opts` yang dapat diteruskan. Opsi ini adalah outlined di dokumentasi `Phoenix.Router.scope/2`.
+
+`BackgroundJob.Plug` dapat diimplementasi sebagai Modul Plug apapun yang didiskusikan di [Plug guide](https://hexdocs.pm/phoenix/plug.html). Tidak disarankan untuk forward to Phoenix endpoint lainnya. Ini karena plug didefinisikan oleh appsmu dan endpoint yang diforward akan dipanggil 2 kali, yang akan menjadi error.
+
+**Summary**
+Routing adalah topic yang gede, dan kita telah melewati semua di sini, Berikut adalah point2 penting di guide ini:
+
+- Routes yang dimulai dengan sebuah HTTP verb meluas menjadi satu klausa fungsi pencocokan (match function)
+- Routes yang dideklarasikan dengan resources meluas menjadi 8 klausa
+- Resources mungkin membatasi jumlah dari match function dengan menggunakan `:only` atau `:except` options.
+- Routes apapun bisa dinested (dibuat bersarang)
+- Routes apapun dapat discope ke path tertentu.
+- Menggunakan verified routes dengan `~p` untuk compile time check.
