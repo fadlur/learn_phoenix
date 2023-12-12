@@ -134,7 +134,7 @@ Endpoint, router, dan controllers di Phoenix menerima plugs.
 
 **Endpoint plugs**
 
-Endpoints mengatut semua plug umum untuk setiap request, dan menerapkannya sebelum dikirim ke router dengan pipeline khusus. Kita menambahkan sebuah plug ke endpoint seperti ini:
+Endpoints mengatur semua plug umum untuk setiap request, dan menerapkannya sebelum dikirim ke router dengan pipeline khusus. Kita menambahkan sebuah plug ke endpoint seperti ini:
 
 ```elixir
 defmodule LearnPhoenixWeb.Endpoint do
@@ -143,3 +143,161 @@ defmodule LearnPhoenixWeb.Endpoint do
   plug :introspect
   plug LearnPhoenixWeb.Router
 ```
+default endpoint plug melakukan banyak hal, berikut urutannya:
+- `Plug.Static` - menyediakan static assets. Karena plug datang sebelum logger, request untuk static assets tidak dilog.
+- `Phoenix.LiveDashboard.RequestLogger` - mengatur _Request Logger_ untuk Phoenix LiveDashboard, ini akan mengijinkan kamu untuk mempunyai opsi untuk melewatkan sebuah query parameter ke request stream logs atau untuk enable/disable sebuah cookie yang mengalirkan request log untuk dashboardmu.
+- `Plug.RequestId` - Men-generate unique request Id untuk masing-masing request
+- `Plug.Telemetry` - Menambahkan poin instrumentasi sehingga Phoenix dapat meng-log request path, status code dan request time secara default.
+- `Plug.Parsers` - parse request body ketika parser yang diketahui ada. Secara default, plug ini menghandle URL-encoded, multipart dan JSON content (dengan `Jason`). Sisa request body tidak disentuh jika request content-type tidak dapat diteruskan.
+- `Plug.MethodOverride` - convert request method ke PUT, PATCH atau DELETE untuk POST request dengan sebuah valid parameter `_method`
+- `Plug.Head` - convert HEAD request ke GET request dan menghapus response body.
+- `Plug.Session` - sebuah plug yang mengatur session management. Perlu diperhatikan bahwa `fetch_session/2` harus tetap secara explisit dipanggil sebelum menggunakan session. Karena plug ini hanya mengatur bagaimana session diambil.
+
+Di tengah endpoint, ada juga sebuah blok persyaratan:
+```elixir
+if code_reloading? do
+    socket "/phoenix/live_reload/socket", Phoenix.LiveReloader.Socket
+    plug Phoenix.LiveReloader
+    plug Phoenix.CodeReloader
+    plug Phoenix.Ecto.CheckRepoStatus, otp_app: :learn_phoenix
+  end
+```
+Blok ini hanya dieksekusi di development env. Blok ini mengenable:
+- live reloading - jika kamu mengubah sebuah CSS file, mereka akan mengupdate di browser tanpa refresh halaman
+- code reloading - Jadi kita dapat melihat perubahan ke aplikasi kita tanpa merestart server
+- check repo status - yang memastikan database kita up to date, meningkatkan readable dan actionable error juga.
+
+**Route plugs**
+Di router, kita dapat mendeklarasikan plug di dalam pipeline:
+```elixir
+defmodule LearnPhoenixWeb.Router do
+  use LearnPhoenixWeb, :router
+
+  pipeline :browser do
+    plug :accepts, ["html"]
+    plug :fetch_session
+    plug :fetch_live_flash
+    plug :put_root_layout, html: {LearnPhoenixWeb.Layouts, :root}
+    plug :protect_from_forgery
+    plug :put_secure_browser_headers
+    plug LearnPhoenixWeb.Plugs.Locale, "en"
+  end
+
+  pipeline :api do
+    plug :accepts, ["json"]
+  end
+
+  scope "/", LearnPhoenixWeb do
+    pipe_through :browser
+
+    get "/", PageController, :home
+    get "/hello", HelloController, :index
+  end
+  ...
+end
+```
+
+Router didefinisikan di dalam scope dan scope mungkin "pipe" melalui multiple pipeline. Sekali sebuah route cocok, Phoenix memanggil semua plug yang didefinisikan di dalam semua pipeline yang diasosiasikan ke route tersebut. Sebagai contoh, mengakses "/" akan "pipe" melalui `:browser` pipeline, konsekuensinya memanggil semua plug-nya.
+
+Seperti kita akan lihat di panduan routing, pipeline sendiri adalah plugs. Di sana, kita akan juga mendiskusikan semua plug di dalam `:browser` pipeline.
+
+**Controller plugs**
+Akhirnya, controller adalah plug juga, jadi kita dapat melakukan:
+```elixir
+defmodule LearnPhoenixWeb.PageController do
+  use LearnPhoenixWeb, :controller
+  plug LearnPhoenixWeb.Plugs.Locale, "en"
+  def home(conn, _params) do
+    # The home page is often custom made,
+    # so skip the default app layout.
+    render(conn, :home, layout: false)
+  end
+end
+```
+
+Secara khusus, controller plug menyediakan sebuah fitur yang mengijinkan kita untuk menjalankan plug hanya di dalam action tertentu. Sebagai contoh:
+```elixir
+defmodule LearnPhoenixWeb.PageController do
+  use LearnPhoenixWeb, :controller
+  plug LearnPhoenixWeb.Plugs.Locale, "en" when action in [:index]
+  def home(conn, _params) do
+    # The home page is often custom made,
+    # so skip the default app layout.
+    render(conn, :home, layout: false)
+  end
+end
+```
+
+Dan plug hanya akan dijalankan untuk `index` action.
+
+**Plugs as composition**
+Dengan mematuhi kontrak plug, kita mengubah sebuah request aplikasi menjadi sebuah series dari transformasi explisit. Itu tidak berhenti di sama. Untuk benar-benar melihat bagaimana efektifnya desain plug kita, mari kita bayangkan skenario di mana kita perlu mengecek sebuah series dari persyaratan dan kemudian meneruskan atau menahan jika persyaratan gagal. Tanpa plug, kita akan berakhir seperti ini:
+```elixir
+defmodule LearnPhoenixWeb.MessageController do
+  use LearnPhoenixWeb, :controller
+
+  def show(conn, params) do
+    case Authenticator.find_user(conn) do
+      {:ok, user} ->
+        case find_message(params["id"]) do
+          nil ->
+            conn |> put_flash(:info, "That message wasn't found") |> redirect(to: ~p"/")
+          message ->
+            if Authorizer.can_access?(user, message) do
+              render(conn, :show, page: message)
+            else
+              conn |> put_flash(:info, "You can't access that page") |> redirect(to: ~p"/")
+            end
+        end
+      :error ->
+        conn |> put_flash(:info, "You must be logged in") |> redirect(to: ~p"/")
+    end  
+  end
+end
+```
+
+Lihat bagaimana hanya sedikit langkah untuk otentikasi dan otorisasi membutuhkan nesting yang rumit dan duplication (berulang)? Mari kita improve dengan beberapa plugs.
+```elixir
+defmodule LearnPhoenixWeb.MessageController do
+  use LearnPhoenixWeb, :controller
+
+  plug :authenticate
+  plug :fetch_message
+  plug :authorize_message
+
+  def show(conn, params) do
+    render(conn, :show, page: conn.assigns[:message])
+  end
+
+  defp authenticate(conn, _) do
+    case Authenticator.find_user(conn) do
+      {:ok, user} ->
+        assign(conn, :user, user)
+      :error ->
+        conn |> put_flash(:info, "You must be logged in") |> redirect(to: ~p"/") |> halt()
+    end
+  end
+
+  defp fetch_message(conn, _) do
+    case find_message(conn.params["id"]) do
+      nil ->
+        conn |> put_flash(:info, "That message wasn't found") |> redirect(to: ~p"/") |> halt()
+      message ->
+        assign(conn, :message, message)
+    end
+  end
+
+  defp authorize_message(conn, _) do
+    if Authorizer.can_access?(conn.assigns[:user], conn.assigns[:message]) do
+      conn
+    else
+      conn |> put_flash(:info, "You can't access that page") |> redirect(to: ~p"/") |> halt()
+    end
+  end
+end
+```
+Untuk membuat ini semua bekerja, kita menconvert nested block dari code dan menggunakan `halt(conn)` di manapun kita mencapai sebuah path yang gagal. function `halt(conn)` sangat penting di sini: `halt(conn)` memberitahu bahwa plug selanjutnya tidak boleh dipanggil.
+
+Pada akhirnya, dengan mengganti nested block menjadi beberapa plug, kita dapat mencapai fungsional yang sama dengan lebih tertata, jelas dan reusable.
+
+Untuk mempelajari lebih lanjut tentang plug. Baca dokumentasinya di [Plugs project](https://hexdocs.pm/plug/1.14.2/Plug.html) yang menyediakan lebih banyak built-in plug dan fungsi-fungsinya.
