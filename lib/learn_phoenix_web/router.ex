@@ -2,7 +2,7 @@ defmodule LearnPhoenixWeb.Router do
   use LearnPhoenixWeb, :router
 
   pipeline :browser do
-    plug :accepts, ["html"]
+    plug :accepts, ["html", "json"]
     plug :fetch_session
     plug :fetch_live_flash
     plug :put_root_layout, html: {LearnPhoenixWeb.Layouts, :root}
@@ -20,37 +20,39 @@ defmodule LearnPhoenixWeb.Router do
 
     get "/", PageController, :home
     get "/hello", HelloController, :index
+    get "/hello/:messenger", HelloController, :show
+    get "/redirect_test", PageController, :redirect_test
     # resources "/users", UserController
     # resources "/posts", PostController, only: [:index, :show]
-    resources "/comments", CommentController, except: [:delete]
+    # resources "/comments", CommentController, except: [:delete]
 
-    resources "/users", UserController do
-      resources "/posts", PostController
-    end
+    # resources "/users", UserController do
+    #   resources "/posts", PostController
+    # end
   end
 
-  scope "/admin", LearnPhoenixWeb.Admin do
-    pipe_through :browser
+  # scope "/admin", LearnPhoenixWeb.Admin do
+  #   pipe_through :browser
 
-    resources "/images", ImageController
-    resources "/reviews", ReviewController
-    resources "/users", UserController
-  end
+  #   resources "/images", ImageController
+  #   resources "/reviews", ReviewController
+  #   resources "/users", UserController
+  # end
 
   # Other scopes may use custom stacks.
   # scope "/api", LearnPhoenixWeb do
   #   pipe_through :api
   # end
 
-  scope "/api", LearnPhoenixWeb.Api, as: :api do
-    pipe_through :api
+  # scope "/api", LearnPhoenixWeb.Api, as: :api do
+  #   pipe_through :api
 
-    scope "/v1", V1, as: :v1 do
-      resources "/images", ImageController
-      resources "/reviews", ReviewController
-      resources "/users", UserController
-    end
-  end
+  #   scope "/v1", V1, as: :v1 do
+  #     resources "/images", ImageController
+  #     resources "/reviews", ReviewController
+  #     resources "/users", UserController
+  #   end
+  # end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
   if Application.compile_env(:learn_phoenix, :dev_routes) do
@@ -69,7 +71,7 @@ defmodule LearnPhoenixWeb.Router do
     end
   end
 
-  pipeline :auth do
-    plug LearnPhoenixWeb.Authentication
-  end
+  # pipeline :auth do
+  #   plug LearnPhoenixWeb.Authentication
+  # end
 end
