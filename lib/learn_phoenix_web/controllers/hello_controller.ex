@@ -2,7 +2,11 @@ defmodule LearnPhoenixWeb.HelloController do
   use LearnPhoenixWeb, :controller
 
   def index(conn, _params) do
-    render(conn, :index)
+    # render(conn, :index)
+    conn
+    # |> put_root_layout(html: false)
+    |> put_layout(html: :admin)
+    |> render(:index)
   end
 
   def show(conn, %{"messenger" => messenger}) do
