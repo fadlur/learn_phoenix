@@ -468,3 +468,122 @@ INSERT INTO "categories" ("title","inserted_at","updated_at") VALUES ($1,$2,$3) 
 ```
 
 Sebelum kita mengintegrasikan categories di web layer, kita perlu memberi tahu context tahu bagaimana mengasosiasikan product dan categori. Pertama, buka `lib/learn_phoenix/catalog/product.ex` dan tambahkan asosiasi berikut:
+
+```elixir
++ alias LearnPhoenix.Catalog.Category
+
+  schema "products" do
+    field :description, :string
+    field :price, :decimal
+    field :title, :string
+    field :views, :integer
+
++   many_to_many :categories, Category, join_through: "product_categories", on_replace: :delete
+
+    timestamps()
+  end
+
+```
+Kita menggunakan macro `Ecto.Schema` `many_to_many` untuk memberi tahu Ecto bagimana untuk mengasosiasikan product kita ke multiple categories melalui "product_categories" join table. Kita juga menggunakan `on_replace: :delete` option untuk deklarasi bahwa existing data record harus dihapus ketika kita mengubah category kita.
+
+Dengan schema asosiasi telah kita set up, kita dapat mengimplementasi pemilihan categoy di form product. Untuk melakukan itu, kita perlu menterjemahkan user input dari category ID dari front-end ke many-to-many asosiasi kita. Untungnya Ecto membuat ini mudah setelah schema kita setup. Buka context catalog dan buat perubahan berikut:
+
+```elixir
++ alias Hello.Catalog.Category
+
+- def get_product!(id), do: Repo.get!(Product, id)
++ def get_product!(id) do
++   Product |> Repo.get!(id) |> Repo.preload(:categories)
++ end
+
+  def create_product(attrs \\ %{}) do
+    %Product{}
+-   |> Product.changeset(attrs)
++   |> change_product(attrs)
+    |> Repo.insert()
+  end
+
+  def update_product(%Product{} = product, attrs) do
+    product
+-   |> Product.changeset(attrs)
++   |> change_product(attrs)
+    |> Repo.update()
+  end
+
+  def change_product(%Product{} = product, attrs \\ %{}) do
+-   Product.changeset(product, attrs)
++   categories = list_categories_by_id(attrs["category_ids"])
+
++   product
++   |> Repo.preload(:categories)
++   |> Product.changeset(attrs)
++   |> Ecto.Changeset.put_assoc(:categories, categories)
+  end
+
++ def list_categories_by_id(nil), do: []
++ def list_categories_by_id(category_ids) do
++   Repo.all(from c in Category, where: c.id in ^category_ids)
++ end
+```
+
+Pertama, kita menambahkan `Repo.preload` untuk preload categories kita ketika kita mengambil sebuah product. Ini akan mengijinkan kita untuk mereferensi `product.categories` di controllers, templates dan di manapun juga kita ingin menggunakan informasi category. Kemudian kita modifikasi `create_product` dan `update_product` untuk memanggil ke `change_product` yang sudah ada untuk membuat sebuah changeset. Di dalam `change_product` kita menambahkan sebuah pencarian untuk semua categories jika `categories_ids` attribut ada. Kemudian kita preload categories dan memanggil `Ecto.Changeset.put_assoc` untuk meletakkan categories yang telah kita ambil menjadi changeset. Akhirnya, kita mengimplementasi `list_categories_by_id/1` untuk query categories yang cocok dengan category IDs, atau mengembalikan list kosong jika tidak ada `category_ids`. Sekarang `create_product` dan `update_product` menerima sebuah changeset dengan asosiasi category. Semua telah siap dalam sekali jalan saat insert atau update ke repo kita.
+
+Selanjutnya, mari expose fitur baru kita ke web dengan menambahkan category input ke product form kita. Untuk menjaga template kita tetap rapi, mari tulis sebuah function baru untuk membungkus detail rendering dari category selection untuk product kita. Buka `ProductHTML` view di `lib/learn_phoenix_web/controllers/product_html.ex` dan masukkan ini:
+
+```elixir
+  def category_opts(changeset) do
+    existing_ids =
+      changeset
+      |> Ecto.Changeset.get_change(:categories, [])
+      |> Enum.map(& &1.data.id)
+
+    for cat <- LearnPhoenix.Catalog.list_categories(),
+        do: [key: cat.title, value: cat.id, selected: cat.id in existing_ids]
+  end
+```
+
+Kita menambhakan satu function `category_opts/1` yang men-generate select option untuk multiple select tag yang akan kita tambahkan nanti. Kita mengkalkulasi existing category ID dari changeset kita, kemudian menggunakan nilai itu ketika kita men-generate select options untuk input tag. Kita telah melakukan ini dengan enumerating seluruh categories kita dan mengembalikan `key`, `value` dan `selected` value yang sesuai. Kita tandai sebuah option sebagai selected jika category ID ditemukan di category ID di dalam changset.
+
+Dengan `category_opts` di tempatnya, kita dapat membuka `lib/learn_phoenix_web/product_html/product_form.html.heex` dan menambahkan:
+
+```elixir
+    ...
+  <.input field={f[:views]} type="number" label="Views" />
+
++ <.input field={f[:category_ids]} type="select" multiple={true} options={category_opts(@changeset)} />
+
+  <:actions>
+    <.button>Save Product</.button>
+  </:actions>
+```
+
+Kita telah menambahkan `category_select` di atas save button kita. Sekarang kita coba, kemudian kita tunjukkan products category di product show template. Tambahkan kode berikut untuk list di `lib/learn_phoenix_web/controllers/product_html/show.html.heex`:
+
+```elixir
+<.list>
+  ...
++ <:item title="Categories">
++   <%= for cat <- @product.categories do %>
++     <%= cat.title %>
++     <br/>
++   <% end %>
++ </:item>
+</.list>
+```
+
+Sekarang jika kita buka form input productnya, sudah ada pilihan category dan di show productnya juga udah ada list category yang kita pilih.
+
+```elixir
+Title: Elixir Flashcards
+Description: Flash card set for the Elixir programming language
+Price: 5.000000
+Views: 0
+Categories:
+Education
+Books
+```
+
+Tidak banyak yang bisa dilihat, tapi setidaknya sudah berjalan. Kita telah menambahkan relationship dai dalam context kita komplit dengan data integritynya. Lumayanlah, sekarang kita lanjutkan.
+
+**Cross-context dependencies**
+
