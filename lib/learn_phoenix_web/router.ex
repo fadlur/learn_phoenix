@@ -22,6 +22,7 @@ defmodule LearnPhoenixWeb.Router do
     get "/hello", HelloController, :index
     get "/hello/:messenger", HelloController, :show
     get "/redirect_test", PageController, :redirect_test
+    resources "/products", ProductController
     # resources "/users", UserController
     # resources "/posts", PostController, only: [:index, :show]
     # resources "/comments", CommentController, except: [:delete]

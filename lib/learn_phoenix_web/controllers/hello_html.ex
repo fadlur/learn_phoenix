@@ -14,7 +14,7 @@ defmodule LearnPhoenixWeb.HelloHTML do
   def greet(assigns) do
     ~H"""
     <h2>Hello World, from <%= @messenger %>!</h2>
-    <%= raw "<b>Bold?</b>" %>
+    <%= raw("<b>Bold?</b>") %>
     """
   end
 end

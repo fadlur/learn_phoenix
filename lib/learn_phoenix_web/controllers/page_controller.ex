@@ -2,6 +2,7 @@ defmodule LearnPhoenixWeb.PageController do
   use LearnPhoenixWeb, :controller
   plug LearnPhoenixWeb.Plugs.Locale, "en" when action in [:index]
   plug :put_view, html: LearnPhoenixWeb.PageHTML, json: LearnPhoenixWeb.PageJSON
+
   def home(conn, _params) do
     # The home page is often custom made,
     # so skip the default app layout.
