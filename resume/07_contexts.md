@@ -587,3 +587,117 @@ Tidak banyak yang bisa dilihat, tapi setidaknya sudah berjalan. Kita telah menam
 
 **Cross-context dependencies**
 
+Setelah kita punya permulaan dari fitur catalog product kita, mari kita bekerja untuk fitur utama lainnya. carting product dari catalog. Untuk track product yang telah dimasukkan ke keranjang user dengan baik, kita akan menambhkan tempat untuk menyimpan informasi ini. bersama dengan point-in-time informasi product seperti harga pada waktu carting. Ini diperlukan supaya kita dapat mendeteksi perubahan harga product kedepannya. Kita tahu kalau kita perlu membuat, tapi sekarang kita perlu menentukan di mana functionality cart ada di aplikasi kita.
+
+Jika kita ambil selangkah ke belakang, dan berpikir tentang isolasi dari aplikasi kita, eksibisi product di catalog kita berbeda dari tanggung jawab dari mengelola keranjang user. Sebuah product catalog tidak pedulu tentang aturan dari shopping cart system kita, begitu juga sebaliknya. Ada kebutuhan yang jelas di sini untuk memisahkan context untuk menghandle tanggungjawab keranjang. Mari kita panggil saja itu `ShoppingCart`.
+
+Mari kita buat context `ShoppingCart` untuk menghandle tugas dasar cart. Sebelum kita menulis kode, bayangkan kita mempunyai fitur berikut yang diperlukan:
+1. Menambahkan product ke keranjang user dari halaman product show
+2. Menyimpan informasi harga product saat waktu menambahkan ke keranjang
+3. Menyimpan dan mengupdate quantity di keranjang
+4. Menghitung dan menampilkan total harga di keranjang
+
+Dari deskripsi, sudah jelas kita membutuhkan sebuah `Cart` resource untuk menyimpan keranjang user, bersama dengan `CartItem` untuk mentract product di cart. Dengan set rencana kita, jalankan command berikut untuk men-generate context baru kita:
+
+```elixir
+>mix phx.gen.context ShoppingCart Cart carts user_uuid:uuid:unique
+* creating lib/learn_phoenix/shopping_cart/cart.ex
+* creating priv/repo/migrations/20231217133820_create_carts.exs
+* creating lib/learn_phoenix/shopping_cart.ex
+* injecting lib/learn_phoenix/shopping_cart.ex
+* creating test/learn_phoenix/shopping_cart_test.exs
+* injecting test/learn_phoenix/shopping_cart_test.exs
+* creating test/support/fixtures/shopping_cart_fixtures.ex
+* injecting test/support/fixtures/shopping_cart_fixtures.ex
+
+Some of the generated database columns are unique. Please provide
+unique implementations for the following fixture function(s) in
+test/support/fixtures/shopping_cart_fixtures.ex:
+
+    def unique_cart_user_uuid do
+      raise "implement the logic to generate a unique cart user_uuid"
+    end
+
+
+Remember to update your repository by running migrations:
+
+    $ mix ecto.migrate
+```
+
+Kita telah men-generate context baru kita `ShoppingCart`, dengan sebuah `ShoppingCart.Cart` shema untuk mengikat seorang user ke cart mereka yang memegang cart items. Kita tidak punya real user saat ini, jadi untuk sekarang cart kita akan ditract oleh anonymouse user UUID yang kita akan tambahkan ke plug session di suatu moment. Dengan cart kita di tempat, mari generate cart items:
+
+```elixir
+mix phx.gen.context ShoppingCart CartItem cart_items cart_id:references:carts product_id:references:products price_when_carted:decimal quantity:integer
+You are generating into an existing context.
+
+The LearnPhoenix.ShoppingCart context currently has 6 functions and 1 file in its directory.
+
+  * It's OK to have multiple resources in the same context as long as they are closely related. But if a context grows too large, consider breaking it apart
+
+  * If they are not closely related, another context probably works better
+
+The fact two entities are related in the database does not mean they belong to the same context.
+
+If you are not sure, prefer creating a new context over adding to the existing one.
+
+Would you like to proceed? [Yn] y
+* creating lib/learn_phoenix/shopping_cart/cart_item.ex
+* creating priv/repo/migrations/20231217134300_create_cart_items.exs
+* injecting lib/learn_phoenix/shopping_cart.ex
+* injecting test/learn_phoenix/shopping_cart_test.exs
+* injecting test/support/fixtures/shopping_cart_fixtures.ex
+
+Remember to update your repository by running migrations:
+
+    $ mix ecto.migrate
+```
+
+Kita telah men-generate resource baru di dalam `ShoppingCart` dengan nama `CartItem`. Schema dan table ini akan menyimpan referensi ke cart dan product, bersama dengan harga pada waktu kita menambahkan item ke cart kita, dan quantity yang user mau purchase. Mari kita buka migration file di `priv/repo/migrations/*_create_cart_items.ex`:
+
+```elixir
+    create table(:cart_items) do
+-     add :price_when_carted, :decimal
++     add :price_when_carted, :decimal, precision: 15, scale: 6, null: false
+      add :quantity, :integer
+-     add :cart_id, references(:carts, on_delete: :nothing)
++     add :cart_id, references(:carts, on_delete: :delete_all)
+-     add :product_id, references(:products, on_delete: :nothing)
++     add :product_id, references(:products, on_delete: :delete_all)
+
+      timestamps()
+    end
+
+-   create index(:cart_items, [:cart_id])
+    create index(:cart_items, [:product_id])
++   create unique_index(:cart_items, [:cart_id, :product_id])
+```
+
+Kita menggunakan `:delete_all` strategi lagi untuk mendorong data integrity. Cara ini, ketika sebuah cart atau product di hapus dari aplikasi, kita tidak harus bergantung pada kode aplikasi di `ShoppingCart` atau `Catalog` context untuk khawatir tentang membersihkan datanya. Ini menjaga kode aplikasi kita terpisah (decoupled) dan data integrity mendorong di mana dia berada - di database. Kita juga menambahkan unique constraint (batasan) untuk memastikan sebuah product duplikak tidak diijinkan untuk ditambahkan ke cart. Sama seperti `product_categories` table, menggunakan multi-kolom index mengijinkan kita untuk menghapus index yang terpisah untuk field paling kiri (cart-id). Dengan database table sudah siap, sekarang kita migrate:
+
+```elixir
+mix ecto.migrate
+Compiling 3 files (.ex)
+Generated learn_phoenix app
+
+20:47:06.297 [info] == Running 20231217133820 LearnPhoenix.Repo.Migrations.CreateCarts.change/0 forward
+
+20:47:06.300 [info] create table carts
+
+20:47:06.321 [info] create index carts_user_uuid_index
+
+20:47:06.335 [info] == Migrated 20231217133820 in 0.0s
+
+20:47:06.396 [info] == Running 20231217134300 LearnPhoenix.Repo.Migrations.CreateCartItems.change/0 forward
+
+20:47:06.397 [info] create table cart_items
+
+20:47:06.417 [info] create index cart_items_product_id_index
+
+20:47:06.426 [info] create index cart_items_cart_id_product_id_index
+
+20:47:06.441 [info] == Migrated 20231217134300 in 0.0s
+```
+
+Database sudah siap dengan table baru `cart` dan `cart_items`, tapi sekarang kita perlu untuk memetakan apa yang kembali ke aplikasi kita. Kamu mungkin bertanya-tanya bagaimana kita dapat mencampurkan database foreign key lintas table dan bagaimana hal itu berhubungan dengan pattern context functionality yang terisolasi dan dikelompokkan. Mari kita bahas pendekatan dan pengorbanannya.
+
+**Cross-context data**
