@@ -352,3 +352,119 @@ UPDATE "products" AS p0 SET "views" = p0."views" + $1 WHERE (p0."id" = $2) RETUR
 Seperti kita lihat, mendesain dengan context memberimu fondasi yang solid untuk mengembangkan aplikasimu. Menggunakan API yang terdefinisikan dengan baik dan terpisah yang mengekspos maksud dari sistemmu memungkinkan kamu untuk menulis aplikasi lebih mudah dimaintainance dengan kode yang dapat digunakan kembali. Sekarang kita tahu, bagaimana memperluas API context kita, mari kita explore cara handling relationship dengan sebuah context.
 
 **In-context Relationships**
+Fitur dasar catalog udah bagus, tapi mari kita buat lebih bagus lagi dengan mengkategorikan product. Banyak solusi ecommeerce mengijinkan product dikategorikan di cara yang berbeda, seperti sebuah product ditandai sebagai fashion, power tool dll. Mulai dari one-to-one relationship antara product dan category, akan menyebabkan banyak perubahan kode nantinya kalau kite perlu mulai mendukung banyak category. Mari kita setup asosiasi category yang akan memungkinkan kita untuk memulai tracking single category per product, tapi dengan mudah mendukung lebih nantinya kalau kita mengembangkan fiturnya.
+
+Sekarang, category akan berisi hanya informasi textual. Urutan pertama adalah menentukan dimana kategori berada di aplikasi. Kita sudah punya context `Catalog` , yang mengelola product kita. Kategorisasi product secara alami cocok di sini. Phoenix juga cukup cerdas untk men-generate kode di dalam context telah ada, yang membuat menambahkan resource baru ke context sangat mudah. Jalankan command berikut:
+
+```elixir
+mix phx.gen.context Catalog Category categorie
+s title:string:unique
+You are generating into an existing context.
+
+The LearnPhoenix.Catalog context currently has 7 functions and 1 file in its directory.
+
+  * It's OK to have multiple resources in the same context as long as they are closely related. But if a context grows too large, consider breaking it apart
+
+  * If they are not closely related, another context probably works better
+
+The fact two entities are related in the database does not mean they belong to the same context.
+
+If you are not sure, prefer creating a new context over adding to the existing one.
+Would you like to proceed? [Yn] y
+* creating lib/learn_phoenix/catalog/category.ex
+* creating priv/repo/migrations/20231217060108_create_categories.exs
+* injecting lib/learn_phoenix/catalog.ex
+* injecting test/learn_phoenix/catalog_test.exs
+* injecting test/support/fixtures/catalog_fixtures.ex
+
+Remember to update your repository by running migrations:
+
+    $ mix ecto.migrate
+
+```
+
+Kali ini, kita menggunakan `mix phx.gen.context` yang seperti `mix phx.gen.html` hanya saja tidak men-generate file web untuk kita. Karena kita sudah mempunyai controller san template untuk mengelola product, kita dapat mengintegrasikan fitur new category ke existing web form, dan halaman product show. Kita dapat melihat, sekarang kita mempunyai sebuah `Category` schema baru bersama dengan schema lainnya di `lib/learn_phoenix/catalog/category.ex`. Dan phoenix memberi tahu kita baru saja menginject function baru ke context Catalog yang sudah ada untuk functionality category. function yang baru diinject terlihat mirip dengan product function kita, dengan new function seperti `create_category`, `list_category` dan lainnya. Sebelum kita migrate, kita perlu melakukan sedikit code generation. Category schema yang sekarang sudah cukup untuk merepressentasikan individual category di sistem, tapi kita perlu mendukung juga sebuah many-to-many relationship antara product dan category. Untungnya, ecto mengijinkan kita untuk melakukan ini dengan mudah dengan sebuah join table, jadi mari kita generate untuk skarang dengan command `ecto.gen.migration`:
+
+```elixir
+mix ecto.gen.migration create_product_categori
+es
+* creating priv/repo/migrations/20231217061724_create_product_categories.exs
+```
+
+Kemudian, buka migration yang baru saja dibuat dan tambahkan kode ke `change` function:
+
+```elixir
+defmodule LearnPhoenix.Repo.Migrations.CreateProductCategories do
+  use Ecto.Migration
+
+  def change do
+    create table(:product_categories, primary_key: false) do
+      add :product_id, references(:products, on_delete: :delete_all)
+      add :category_id, references(:categories, on_delete: :delete_all)
+    end
+
+    create index(:product_categories, [:product_id])
+    create unique_index(:product_categories, [:category_id, :product_id])
+  end
+end
+
+```
+
+Kita telah membuat `product_categories` table dan menggunakan `primary_key: false` option karena join table kita tidak membutuhkan primary key. Kemudian kita mendefinisikan field `:product_id` dan `:category_id` foreign key, dan menambahkan `on_delete: :delete_all` untuk memastikan database menghapus data join table kita jika product atau category yang tersambung telah dihapus. Dengan menggunakna sebuah contraint database, kita memaksa data integrity di database level, dibandingkan menggantungkan ke ad-hoc dan error-prone di application logic.
+
+Selanjutnya, kita membuat index untuk foreign key kita, satu diantaranya adalah unique index untuk memastikan sebuah product tidak mempunyai data duplikat. Perhatikan bahwa kita tidak perlu index kolom tunggal untuk category_id karena index ini berada di awalan paling kiri dari index multikolom, yang sudah cukup untk pengoptimal database. Sebaliknya, menambahkan index yang berlebihan hanya akan menambah overhead saat penulisan.
+
+Sekarang kita migrate:
+
+```elixir
+mix ecto.migrate
+
+13:20:16.331 [info] == Running 20231217060108 LearnPhoenix.Repo.Migrations.CreateCategories.change/0 forward
+
+13:20:16.333 [info] create table categories
+
+13:20:16.348 [info] create index categories_title_index
+
+13:20:16.352 [info] == Migrated 20231217060108 in 0.0s
+
+13:20:16.376 [info] == Running 20231217061724 LearnPhoenix.Repo.Migrations.CreateProductCategories.change/0 forward
+
+13:20:16.376 [info] create table product_categories
+
+13:20:16.381 [info] create index product_categories_product_id_index
+
+13:20:16.383 [info] create index product_categories_category_id_product_id_index
+
+13:20:16.385 [info] == Migrated 20231217061724 in 0.0s
+```
+
+Sekarang kita mempunyai sebuah schema `Catalog.Product` dan sebuah join table untuk asosiasi products dan categori, kita hampir siap untuk memulai melakukan wiring fitur baru kita. Sebelum kita melihat lebih lanjut, kita membutuhkan real categori untuk dipilih di web UI. Mari kita buat seed beberapa category di aplikasi. Tambahkan kode untuk seed file di `priv/repo/seeds.exs`:
+
+```elixir
+for title <- ["Home Improvement", "Power Tools", "Gardening", "Books", "Education"] do
+  {:ok, _} = LearnPhoenix.Catalog.create_category(%{title: title})
+end
+```
+
+Kita cukup enumerate sebuah list dari title category dan menggunakan function yang telah digenerate `create_category/1` dari context catalog untuk menyimpan data. Kita dapat menjalankan seeds dengan `mix run`:
+
+```elixir
+mix run priv/repo/seeds.exs
+[debug] QUERY OK source="categories" db=2.9ms decode=0.6ms queue=24.9ms idle=0.0ms
+INSERT INTO "categories" ("title","inserted_at","updated_at") VALUES ($1,$2,$3) RETURNING "id" ["Home Improvement", ~N[2023-12-17 06:34:03], ~N[2023-12-17 06:34:03]]
+↳ anonymous fn/1 in :elixir_compiler_1.__FILE__/1, at: priv/repo/seeds.exs:13
+[debug] QUERY OK source="categories" db=0.9ms queue=1.0ms idle=11.8ms
+INSERT INTO "categories" ("title","inserted_at","updated_at") VALUES ($1,$2,$3) RETURNING "id" ["Power Tools", ~N[2023-12-17 06:34:03], ~N[2023-12-17 06:34:03]]
+↳ anonymous fn/1 in :elixir_compiler_1.__FILE__/1, at: priv/repo/seeds.exs:13
+[debug] QUERY OK source="categories" db=0.8ms queue=0.8ms idle=13.8ms
+INSERT INTO "categories" ("title","inserted_at","updated_at") VALUES ($1,$2,$3) RETURNING "id" ["Gardening", ~N[2023-12-17 06:34:03], ~N[2023-12-17 06:34:03]]
+↳ anonymous fn/1 in :elixir_compiler_1.__FILE__/1, at: priv/repo/seeds.exs:13
+[debug] QUERY OK source="categories" db=0.8ms queue=0.8ms idle=15.5ms
+INSERT INTO "categories" ("title","inserted_at","updated_at") VALUES ($1,$2,$3) RETURNING "id" ["Books", ~N[2023-12-17 06:34:03], ~N[2023-12-17 06:34:03]]
+↳ anonymous fn/1 in :elixir_compiler_1.__FILE__/1, at: priv/repo/seeds.exs:13
+[debug] QUERY OK source="categories" db=0.9ms queue=0.8ms idle=17.2ms
+INSERT INTO "categories" ("title","inserted_at","updated_at") VALUES ($1,$2,$3) RETURNING "id" ["Education", ~N[2023-12-17 06:34:03], ~N[2023-12-17 06:34:03]]
+↳ anonymous fn/1 in :elixir_compiler_1.__FILE__/1, at: priv/repo/seeds.exs:13
+```
+
+Sebelum kita mengintegrasikan categories di web layer, kita perlu memberi tahu context tahu bagaimana mengasosiasikan product dan categori. Pertama, buka `lib/learn_phoenix/catalog/product.ex` dan tambahkan asosiasi berikut:
