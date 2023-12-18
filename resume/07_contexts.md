@@ -784,3 +784,56 @@ Kita tidak akan focus ke real user otentikasi sistem kali ini, tapi pada saatnya
 +   end
 + end
 ```
+Kita menambahkan plug baru `:fetch_current_user` dan `:fetch_current_cart` ke browser pipeline untuk menjalankan semua request yang berdasarkan browser. Kemudian kita mengimplement plug `:fetch_current_user` mengecek session untuk sebuah UUID yang sebelumnya kita tambahkan. Jika kita menemukan session yang kita cari, kita menambahkan sebuah `current_uuid` assign ke koneksi dan kita selesai. Semisal kita tidak mengidentifikasi pengunjung ini, kita akan men-generate sebuah UUID dengan `Ecto.UUID.generate()`, kemudian kita menempatkan nilai itu ke `current_uuid` assign, bersama dengan nilai session baru untuk mengidentifikasi pengunjung tersebut di kemudian hari. Sebuah ID random tidaklah cukup untuk merepresentasi sebuah user, tapi itu cukup untuk kita mengtract dan mengidentifikasi seorang pengunjung di dalam request, yang mana itu cukup untuk saat ini. Kemudian kalo aplikasi kita menjadi semakin komplek, kita akan siap untuk migrasi ke sistem otentikasi user yang komplit.  Dengan sebuah jaminan user saat ini, kita kemudian mengimplement plug `fetch_current_cart` yang menemukan sebuah cart untuk user UUID atau membuat sebuah cart untuk user saat ini dan meng-assign hasilnya ke koneksi assign. Kita akan mengimplement `ShoppingCart.get_cart_by_user_uuid/1` dan memodifikasi function create cart untuk menerima sebuah UUID, tapi mari kita buat route dulu.
+
+Kita perlu mengimplement sebuah cart controller untuk menghandle cart operation seperti melihat sebuah cart, update quantity, dan menginisiasi proses checkout, seperti sebuah cart item controller untuk menambahkan dan menghapus item dari dan ke cart. Tambahkan route berikut ke `lib/learn_phoenix_web/router.ex`:
+
+```elixir
+  scope "/", LearnPhoenixWeb do
+    pipe_through :browser
+
+    get "/", PageController, :index
+    resources "/products", ProductController
+
++   resources "/cart_items", CartItemController, only: [:create, :delete]
+
++   get "/cart", CartController, :show
++   put "/cart", CartController, :update
+  end
+```
+
+Kita menambahkan sebuah deklarasi `resources` utnuk `CartItemController`, yang akan kita sambungkan route untuk action create dan delete untuk menambahkan dan menghapus cart item. Kemudian, kita menambahkan dua route baru pointing ke sebuah `CartController`. Route pertama, sebuah GET request, yang akan memetakan ke action show kita, untuk show cart content. Route kedua, sebuah PUT request, yang menghandle submission dari sebuah form untuk update cart quantity.
+
+Dengan route telah selesai kita set, mari tambahkan kemampuan untuk menambahkan sebuah item ke cart dari product show page. Buat sebuah file di `lib/learn_phoenix_web/controllers/cart_item_controller.ex` dan masukkan ini:
+
+```elixir
+defmodule LearnPhoenixWeb.CartItemController do
+  use LearnPhoenixWeb, :controller
+
+  alias LearnPhoenix.ShoppingCart
+
+  def create(conn, %{"product_id" => product_id}) do
+    case ShoppingCart.add_item_to_cart(conn.assigns.cart, product_id) do
+      {:ok, _item} ->
+        conn
+        |> put_flash(:info, "Item added to your cart")
+        |> redirect(to: ~p"/cart")
+
+      {:error, _changeset} ->
+        conn
+        |> put_flash(:error, "There was an error adding the item to your cart")
+        |> redirect(to: ~p"/cart")
+    end
+  end
+
+  def delete(conn, %{"id" => product_id}) do
+    {:ok, _cart} = ShoppingCart.remove_item_from_cart(conn.assigns.cart, product_id)
+    redirect(conn, to: ~p"/cart")
+  end
+end
+```
+
+Kita telah mendefinisikan sebuah `CartItemController` dengan action create dan delete yang kita deklarasikan di router kita. Untuk `create`, kita panggil `ShoppingCart.add_item_to_cart/2` yang kita kita akan implementasikan sebentar lagi. Jika sukses, kita akan menampilkan sebuah flash message sukses dan redirect ke cart show page, kalau tidak kita akan menampilkan flash message error dan redirect ke cart show page. Untuk `delete`, kita panggil `remove_item_from_cart` yang kit akan implement ke `ShoppingCart` context dan kemudian kita redirect kembali ke cart show page. Kita belum mengimplement 2 shopping cart function, tapi perhatikan bagaimana nama mereka mewakili maksud mereka: `add_item_to_cart` dan `remove_item_from_cart` membuatnya jelas tentang apa yang mau diraih di sini. function itu juga memungkinkan kita untuk menentukan web layer dan context API tanpa memikirkan semua detail implementasi sekaligus.
+
+Mari kita implement interface baru untuk `ShoppingCart` context API di `lib/learn_phoenix/shopping_cart.ex`:
+
