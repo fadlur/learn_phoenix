@@ -484,12 +484,13 @@ Sebelum kita mengintegrasikan categories di web layer, kita perlu memberi tahu c
   end
 
 ```
+
 Kita menggunakan macro `Ecto.Schema` `many_to_many` untuk memberi tahu Ecto bagimana untuk mengasosiasikan product kita ke multiple categories melalui "product_categories" join table. Kita juga menggunakan `on_replace: :delete` option untuk deklarasi bahwa existing data record harus dihapus ketika kita mengubah category kita.
 
 Dengan schema asosiasi telah kita set up, kita dapat mengimplementasi pemilihan categoy di form product. Untuk melakukan itu, kita perlu menterjemahkan user input dari category ID dari front-end ke many-to-many asosiasi kita. Untungnya Ecto membuat ini mudah setelah schema kita setup. Buka context catalog dan buat perubahan berikut:
 
 ```elixir
-+ alias Hello.Catalog.Category
++ alias LearnPhoenix.Catalog.Category
 
 - def get_product!(id), do: Repo.get!(Product, id)
 + def get_product!(id) do
@@ -592,6 +593,7 @@ Setelah kita punya permulaan dari fitur catalog product kita, mari kita bekerja 
 Jika kita ambil selangkah ke belakang, dan berpikir tentang isolasi dari aplikasi kita, eksibisi product di catalog kita berbeda dari tanggung jawab dari mengelola keranjang user. Sebuah product catalog tidak pedulu tentang aturan dari shopping cart system kita, begitu juga sebaliknya. Ada kebutuhan yang jelas di sini untuk memisahkan context untuk menghandle tanggungjawab keranjang. Mari kita panggil saja itu `ShoppingCart`.
 
 Mari kita buat context `ShoppingCart` untuk menghandle tugas dasar cart. Sebelum kita menulis kode, bayangkan kita mempunyai fitur berikut yang diperlukan:
+
 1. Menambahkan product ke keranjang user dari halaman product show
 2. Menyimpan informasi harga product saat waktu menambahkan ke keranjang
 3. Menyimpan dan mengupdate quantity di keranjang
@@ -716,6 +718,7 @@ Sekarang kita tahu di mana data dependency kita berada, mari tambahkan asosiasi 
     timestamps()
   end
 ```
+
 Sekarang cart kita sudah diasosiasikan ke item yang kita tempatkan di dalamnya, mari kita set up cart item asosiasi di dalam `lib/learn_phoenix/shopping_cart/cart_item.ex`:
 
 ```elixir
@@ -784,7 +787,8 @@ Kita tidak akan focus ke real user otentikasi sistem kali ini, tapi pada saatnya
 +   end
 + end
 ```
-Kita menambahkan plug baru `:fetch_current_user` dan `:fetch_current_cart` ke browser pipeline untuk menjalankan semua request yang berdasarkan browser. Kemudian kita mengimplement plug `:fetch_current_user` mengecek session untuk sebuah UUID yang sebelumnya kita tambahkan. Jika kita menemukan session yang kita cari, kita menambahkan sebuah `current_uuid` assign ke koneksi dan kita selesai. Semisal kita tidak mengidentifikasi pengunjung ini, kita akan men-generate sebuah UUID dengan `Ecto.UUID.generate()`, kemudian kita menempatkan nilai itu ke `current_uuid` assign, bersama dengan nilai session baru untuk mengidentifikasi pengunjung tersebut di kemudian hari. Sebuah ID random tidaklah cukup untuk merepresentasi sebuah user, tapi itu cukup untuk kita mengtract dan mengidentifikasi seorang pengunjung di dalam request, yang mana itu cukup untuk saat ini. Kemudian kalo aplikasi kita menjadi semakin komplek, kita akan siap untuk migrasi ke sistem otentikasi user yang komplit.  Dengan sebuah jaminan user saat ini, kita kemudian mengimplement plug `fetch_current_cart` yang menemukan sebuah cart untuk user UUID atau membuat sebuah cart untuk user saat ini dan meng-assign hasilnya ke koneksi assign. Kita akan mengimplement `ShoppingCart.get_cart_by_user_uuid/1` dan memodifikasi function create cart untuk menerima sebuah UUID, tapi mari kita buat route dulu.
+
+Kita menambahkan plug baru `:fetch_current_user` dan `:fetch_current_cart` ke browser pipeline untuk menjalankan semua request yang berdasarkan browser. Kemudian kita mengimplement plug `:fetch_current_user` mengecek session untuk sebuah UUID yang sebelumnya kita tambahkan. Jika kita menemukan session yang kita cari, kita menambahkan sebuah `current_uuid` assign ke koneksi dan kita selesai. Semisal kita tidak mengidentifikasi pengunjung ini, kita akan men-generate sebuah UUID dengan `Ecto.UUID.generate()`, kemudian kita menempatkan nilai itu ke `current_uuid` assign, bersama dengan nilai session baru untuk mengidentifikasi pengunjung tersebut di kemudian hari. Sebuah ID random tidaklah cukup untuk merepresentasi sebuah user, tapi itu cukup untuk kita mengtract dan mengidentifikasi seorang pengunjung di dalam request, yang mana itu cukup untuk saat ini. Kemudian kalo aplikasi kita menjadi semakin komplek, kita akan siap untuk migrasi ke sistem otentikasi user yang komplit. Dengan sebuah jaminan user saat ini, kita kemudian mengimplement plug `fetch_current_cart` yang menemukan sebuah cart untuk user UUID atau membuat sebuah cart untuk user saat ini dan meng-assign hasilnya ke koneksi assign. Kita akan mengimplement `ShoppingCart.get_cart_by_user_uuid/1` dan memodifikasi function create cart untuk menerima sebuah UUID, tapi mari kita buat route dulu.
 
 Kita perlu mengimplement sebuah cart controller untuk menghandle cart operation seperti melihat sebuah cart, update quantity, dan menginisiasi proses checkout, seperti sebuah cart item controller untuk menambahkan dan menghapus item dari dan ke cart. Tambahkan route berikut ke `lib/learn_phoenix_web/router.ex`:
 
@@ -837,3 +841,172 @@ Kita telah mendefinisikan sebuah `CartItemController` dengan action create dan d
 
 Mari kita implement interface baru untuk `ShoppingCart` context API di `lib/learn_phoenix/shopping_cart.ex`:
 
+```elixir
++  alias LearnPhoenix.Catalog
+-  alias LearnPhoenix.ShoppingCart.Cart
++  alias LearnPhoenix.ShoppingCart.{Cart, CartItem}
+
++  def get_cart_by_user_uuid(user_uuid) do
++    Repo.one(
++      from(c in Cart,
++        where: c.user_uuid == ^user_uuid,
++        left_join: i in assoc(c, :items),
++        left_join: p in assoc(i, :product),
++        order_by: [asc: i.inserted_at],
++        preload: [items: {i, product: p}]
++      )
++    )
++  end
+
+- def create_cart(attrs \\ %{}) do
+-   %Cart{}
+-   |> Cart.changeset(attrs)
++ def create_cart(user_uuid) do
++   %Cart{user_uuid: user_uuid}
++   |> Cart.changeset(%{})
+    |> Repo.insert()
++   |> case do
++     {:ok, cart} -> {:ok, reload_cart(cart)}
++     {:error, changeset} -> {:error, changeset}
++   end
+  end
+
++  defp reload_cart(%Cart{} = cart), do: get_cart_by_user_uuid(cart.user_uuid)
++
++  def add_item_to_cart(%Cart{} = cart, product_id) do
++    product = Catalog.get_product!(product_id)
++
++    %CartItem{quantity: 1, price_when_carted: product.price}
++    |> CartItem.changeset(%{})
++    |> Ecto.Changeset.put_assoc(:cart, cart)
++    |> Ecto.Changeset.put_assoc(:product, product)
++    |> Repo.insert(
++      on_conflict: [inc: [quantity: 1]],
++      conflict_target: [:cart_id, :product_id]
++    )
++  end
++
++  def remove_item_from_cart(%Cart{} = cart, product_id) do
++    {1, _} =
++      Repo.delete_all(
++        from(i in CartItem,
++          where: i.cart_id == ^cart.id,
++          where: i.product_id == ^product_id
++        )
++      )
++
++    {:ok, reload_cart(cart)}
++  end
+```
+
+Kita mulai dengan mengimplementasi `get_cart_by_user_uuid/1` yang mengambil cart dan join cart item, dan product mereka, jadi apa kita mempunyai cart dengan semua data preloaded. Kemudian, kita modifikasi function `create_cart` untuk menerima UUID user bukan lagi attributes, yang kita gunakan untuk mengumpulkan field `user_uuid`. Jika proses insert berhasil, kita reload cart content dengan memanggil private function `reload_cart/1`, kita panggil `get_cart_by_user_uuid/1` untuk mengambil ulang data.
+
+Kemudian kita menulis function `add_item_to_cart/2` yang menerima sebuah cart struct dan product_id. Kita proses untuk mengambil product dengan `Catalog.get_product!/1`, memperlihatkan bagaimana context dapat secara natural mengambil context lainnya jika diperlukan. Kamu dapat juga memilih untuk menerima product sebagai argument dan kamudapat mencapai hasil yang sama. Kemudian kita gunakan sebuah upsert operation terhadap repo kita untuk insert sebuah cart item ke database, atau menambahkan quantity (+1) jika cart item sudah ada di cart. Ini bisa dicapai via `on_conflict` dan `conflict_target` option, yang memberitahu repo kita bagaimana menghandle proses insert conflict.
+
+Akhirnya, kita mengimplement `remove_item_from_cart/2` di mana kita memanggil `Repo.delete_all` dengan sebuah query untuk menghapus cart item yang cocok dengan product ID. Akhirnya, kita reload cart content dengan memanggil `reload_cart/1`.
+
+Setelah function cart selesai kita buat, kita sekarang dapat mengexpose "Add to cart" button di product catalog show page.
+Buka templatemu di `lib/learn_phoenix_web/controllers/product_html/show.html.heex` dan buka perubahan seperti berikut:
+
+```elixir
+...
+     <.link href={~p"/products/#{@product}/edit"}>
+       <.button>Edit product</.button>
+     </.link>
++    <.link href={~p"/cart_items?product_id=#{@product.id}"} method="post">
++      <.button>Add to cart</.button>
++    </.link>
+...
+```
+
+function component `link` dari `Phoenix.Component` menerima sebuah `:method` attributes untuk mengeluarkan HTTP verb ketika diklik, alih-alih default GET request. Setelah link ini kita buat, "Add to cart" link akan menjalankan POST request, yang akan dicocokkan dengan route yang kita definisikan di router yang dikirimkan ke function `CartItemController.create/2`.
+
+Tapi saat ini masih error ketika kita klik "Add to Cart".
+
+```elixir
+[info] POST /cart_items
+[debug] Processing with HelloWeb.CartItemController.create/2
+  Parameters: %{"_method" => "post", "product_id" => "1", ...}
+  Pipelines: [:browser]
+INSERT INTO "cart_items" ...
+[info] Sent 302 in 24ms
+[info] GET /cart
+[debug] Processing with HelloWeb.CartController.show/2
+  Parameters: %{}
+  Pipelines: [:browser]
+[debug] QUERY OK source="carts" db=1.9ms idle=1798.5ms
+
+[error] #PID<0.856.0> running HelloWeb.Endpoint (connection #PID<0.841.0>, stream id 5) terminated
+Server: localhost:4000 (http)
+Request: GET /cart
+** (exit) an exception was raised:
+    ** (UndefinedFunctionError) function HelloWeb.CartController.init/1 is undefined
+       (module HelloWeb.CartController is not available)
+       ...
+```
+
+Setidaknya proses add to cart berhasil, seperti yang kita lihat di log. Kemudian kita dapat lihat `ShoppingCart.add_item_to_cart` berhasil menyisipkan satu baris ke `cart_items` table. dan kemudian kita redirect ke `/cart`. Sebelum error, kita lihat query ke `carts` table, yang berarti kita mengambil cart user saat ini. Sejauh ini berjalan dengan baik. Kita tahu controller `CartItem` dan context `ShoppingCart` mengerjakan tugasnya, tapi kita saat cart controller belum ada. Jadi mari kita buat, controller, view dan templatenya.
+
+Sekarang buat file baru di `lib/learn_phoenix_web/controllers/cart_controller.ex`, dan masukkan kode berikut:
+
+```elixir
+defmodule LearnPhoenixWeb.CartController do
+  use LearnPhoenixWeb, :controller
+
+  alias LearnPhoenix.ShoppingCart
+
+  def show(conn, _params) do
+    render(conn, :show, changeset: ShoppingCart.change_cart(conn.assigns.cart))
+  end
+end
+
+```
+
+Kita telah mendefinisikan cart contorller baru untuk menghandle `get "/cart"` route. Untuk menampilkan sebuah cart, kita render `"show.html"` template yang kita buat sebentar lagi. Kita tahu kita butuh untuk mengijinkan cart item untuk mengubah quantity update, jadi sekarang kita tahu kita membutuhkan sebuah cart changeset. Untungnya, context generator menyertakan sebuah `ShoppingCart.change_cart/1` function, yang kita gunakan. Kita mengoper cart struct yang sudah ada di koneksi assign. terima kasih ke plug `fetch_current_cart` yang kita definisikan di router.
+
+Kemudian, kita dapat mengimplement view dan template. Buat sebuah view file di `lib/learn_phoenix_web/controller/cart_html.ex`:
+
+```elixir
+defmodule LearnPhoenixWeb.CartHTML do
+  use LearnPhoenixWeb, :html
+
+  alias LearnPhoenix.ShoppingCart
+
+  embed_templates "cart_html/*"
+
+  def currency_to_str(%Decimal{} = val), do: "$#{Decimal.round(val, 2)}"
+end
+
+```
+
+Kita membuat view untuk merender `show.html` template dan alias `ShoppingCart` context di dalam scope template kita. Kita akan perlu menampilkan harga cart seperti product item price, cart total, dll. Jadi kita mendefinisikan `currency_to_str/1` yang mengambil decimal struct kita, bulatkan angkanya untuk display, dan awali USD dollar sign.
+
+Kemudian,kita buat template di `lib/learn_phoenix_web/controllers/cart_html/show.html.heex`:
+
+```elixir
+<%= if @cart.items == [] do %>
+<.header>
+  My Cart
+  <:subtitle>Your cart is empty</:subtitle>
+</.header>
+<% else %>
+  <.header>
+    My Cart
+  </.header>
+
+  <.simple_form :let={f} for={@changeset} action={~p"/cart"}>
+    <.inputs_for :let={item_form} field={f[:items]}>
+	<% item = item_form.data %>
+      <.input field={item_form[:quantity]} type="number" label={item.product.title} />
+      <%= currency_to_str(ShoppingCart.total_item_price(item)) %>
+    </.inputs_for>
+    <:actions>
+      <.button>Update cart</.button>
+    </:actions>
+  </.simple_form>
+
+  <b>Total</b>: <%= currency_to_str(ShoppingCart.total_cart_price(@cart)) %>
+<% end %>
+
+<.back navigate={~p"/products"}>Back to products</.back>
+```

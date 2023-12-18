@@ -26,12 +26,14 @@ defmodule LearnPhoenixWeb.Router do
   end
 
   alias LearnPhoenix.ShoppingCart
-  deft fetch_current_cart(conn, _opts) do
+
+  defp fetch_current_cart(conn, _opts) do
     if cart = ShoppingCart.get_cart_by_user_uuid(conn.assigns.current_uuid) do
       assign(conn, :cart, cart)
     else
       {:ok, new_cart} = ShoppingCart.create_cart(conn.assigns.current_uuid)
       assign(conn, :cart, new_cart)
+    end
   end
 
   pipeline :api do

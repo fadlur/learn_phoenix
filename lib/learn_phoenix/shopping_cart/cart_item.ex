@@ -16,6 +16,6 @@ defmodule LearnPhoenix.ShoppingCart.CartItem do
     cart_item
     |> cast(attrs, [:price_when_carted, :quantity])
     |> validate_required([:price_when_carted, :quantity])
-    |> validate_number([:quantity, greater_than_or_equal_to: 0, less_than: 100])
+    |> validate_number(:quantity, greater_than_or_equal_to: 0, less_than: 100)
   end
 end
