@@ -701,3 +701,86 @@ Generated learn_phoenix app
 Database sudah siap dengan table baru `cart` dan `cart_items`, tapi sekarang kita perlu untuk memetakan apa yang kembali ke aplikasi kita. Kamu mungkin bertanya-tanya bagaimana kita dapat mencampurkan database foreign key lintas table dan bagaimana hal itu berhubungan dengan pattern context functionality yang terisolasi dan dikelompokkan. Mari kita bahas pendekatan dan pengorbanannya.
 
 **Cross-context data**
+Sejauh ini kita telah melakukan isolasi 2 context utama dari aplikasi kita satu sama lain, tapi sekarang kita punya sebuah dependency yang perlu dihandle.
+
+`Catalog.Product` resource kita bekerja untuk menjaga tanggunjawab merepresentasi sebuah product di dalam catalog, tapi pada akhirnya agar sebuah item ada di keranjang, sebuah product di dalam catalog harus ada. Oleh karena itu, context `ShoppingCart` akan memiliki sebuah data dependency di context `Catalog`. Dengan mengingat itu, kita mempunya 2 pilihan, Salah satunya adalah mengexpose API pada context Catalog yang memungkinkan secara efisien mengambil data product untuk digunakan di sistem Shopping Cart, yang akan kita gabungkan secara manual. Atau kita dapat menggunakan database join untuk mengambil data dependen. Keduanya adalah opsi yang valid yang memberi tradeoff dan ukuran aplikasimu, tapi joining data dari database ketika kamu memiliki sebuah data dependency baik-baik saja untuk sebuah class dari aplikasi yang gede dan pendekatan ini yang akan diambil di sini.
+
+Sekarang kita tahu di mana data dependency kita berada, mari tambahkan asosiasi schema kita sehingga kita dapat mengikat shopping cart items ke products. Pertama, mari kita buat perubahan di schema cart kita di dalam `lib/learn_phoenix/shopping_cart/cart.ex` untuk mengasosiasikan sebuah ke itemnya:
+
+```elixir
+  schema "carts" do
+    field :user_uuid, Ecto.UUID
+
++   has_many :items, LearnPhoenix.ShoppingCart.CartItem
+
+    timestamps()
+  end
+```
+Sekarang cart kita sudah diasosiasikan ke item yang kita tempatkan di dalamnya, mari kita set up cart item asosiasi di dalam `lib/learn_phoenix/shopping_cart/cart_item.ex`:
+
+```elixir
+  schema "cart_items" do
+    field :price_when_carted, :decimal
+    field :quantity, :integer
+-   field :cart_id, :id
+-   field :product_id, :id
+
++   belongs_to :cart, LearnPhoenix.ShoppingCart.Cart
++   belongs_to :product, LearnPhoenix.Catalog.Product
+
+    timestamps()
+  end
+
+  @doc false
+  def changeset(cart_item, attrs) do
+    cart_item
+    |> cast(attrs, [:price_when_carted, :quantity])
+    |> validate_required([:price_when_carted, :quantity])
++   |> validate_number(:quantity, greater_than_or_equal_to: 0, less_than: 100)
+  end
+```
+
+Pertama, kita ganti `cart_id` dengan `belongs_to` untuk menuju ke schema `ShoppingCart.Cart`. Kemudian kita ganti `product_id` dengan menambahkan cross-context data dependency pertama kita dengan sebuah `belongs_to` ke schema `Catalog.Product`. Di sini kita mau memasangkan batasan data karena itu yang kita butuhkan. Sebuah context API yang terisolasi dengan pengetahuan minimum (bare minimum) yang diperlukan untuk mereferensikan sebuah product di sistem kita. Kemudian, kita tambahkan sebuah validasi baru ke changeset kita. Dengan `validate_number/3`, kita memastikan quantity yang disediakan oleh user input antara 0 sampai 100.
+
+Dengan shema kita di tempatnya, kita dapat memulai integrasi data struktur baru dan context `ShoppingCart` API ke fitur web kita.
+
+**Adding Shopping Cart functions**
+Seperti dibahas sebelum-sebelumnya, context generator hanyalah titik awal aja untuk aplikasi kita. Kita dapat dan bisa menulis penamaan yang bagus, tujuan untuk membangun function untuk mencapai gol dari context kita. Kita mempunya beberapa fitur baru untuk diimplement. Pertama, kita perlu memastikan setiap user dari aplikasi kita dijamin sebuah keranjang jika belum punya. Dari sana, kita kemudian dapat mengijinkan user untuk menambahkan item ke keranjang mereka, update item quantity dan menghitung total cart.
+
+Kita tidak akan focus ke real user otentikasi sistem kali ini, tapi pada saatnya kita selesai, kita dapat mengintegrasikan dengan apa yang sudah kita tulis di sini. Untuk simulasi session user saat ini, buka `lib/learn_phoenix_web/router.ex` dan buka bagian ini:
+
+```elixir
+  pipeline :browser do
+    plug :accepts, ["html"]
+    plug :fetch_session
+    plug :fetch_live_flash
+    plug :put_root_layout, html: {LearnPhoenixWeb.LayoutView, :root}
+    plug :protect_from_forgery
+    plug :put_secure_browser_headers
++   plug :fetch_current_user
++   plug :fetch_current_cart
+  end
+
++ defp fetch_current_user(conn, _) do
++   if user_uuid = get_session(conn, :current_uuid) do
++     assign(conn, :current_uuid, user_uuid)
++   else
++     new_uuid = Ecto.UUID.generate()
++
++     conn
++     |> assign(:current_uuid, new_uuid)
++     |> put_session(:current_uuid, new_uuid)
++   end
++ end
+
++ alias LearnPhoenix.ShoppingCart
++
++ defp fetch_current_cart(conn, _opts) do
++   if cart = ShoppingCart.get_cart_by_user_uuid(conn.assigns.current_uuid) do
++     assign(conn, :cart, cart)
++   else
++     {:ok, new_cart} = ShoppingCart.create_cart(conn.assigns.current_uuid)
++     assign(conn, :cart, new_cart)
++   end
++ end
+```

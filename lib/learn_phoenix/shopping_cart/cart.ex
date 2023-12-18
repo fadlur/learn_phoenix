@@ -4,7 +4,7 @@ defmodule LearnPhoenix.ShoppingCart.Cart do
 
   schema "carts" do
     field :user_uuid, Ecto.UUID
-
+    has_many :items, LearnPhoenix.ShoppingCart.CartItem
     timestamps()
   end
 
