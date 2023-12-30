@@ -1010,3 +1010,81 @@ Kemudian,kita buat template di `lib/learn_phoenix_web/controllers/cart_html/show
 
 <.back navigate={~p"/products"}>Back to products</.back>
 ```
+
+Kita mulai dengan menampilkan pesan cart kosong jika preloaded `cart.items` masih kosong. Jika kita mempunyai items, kita menggunakan `simple_form` component yang disediakan oleh `LearnPhoenixWeb.CoreComponents` untuk mengambil changeset cart kita yang kita assigned di action `CartController.show/2` dan membuat form yang memetakan ke action `update/2` di cart controller. Di dalam form, kita menggunakan `inputs_for` component untuk merender input untuk menyarangkan cart items. Ini memungkinkan kita untuk memetakan input items kembali bersama ketika form disubmit. Kemudian, kita menampilkan sebuah input nomer untuk item quantity dan memberinya label product title. Kita menyeselesaikan form item dengan menconvert item price menjadi string. Kita belum menulis `ShoppingCart.total_item_price/1` saat ini, tapi sekali lagi kita sudah jelas, mendeskripsikan public interfaces untuk contexts kita. Setelah merender input untuk semua cart items, kita menampilkan button submit "update cart", bersama dengan total price untuk seluruh cart. Ini dapat kita capai dengan function `ShoppingCart.total_cart_price/1` yang akan kita implement sebentar lagi. Akhirnya kita menambahkan sebuah component `back` untuk kembali ke halaman product kita.
+
+Kita hampir siap untuk mencoba halaman cart kita, tapi sebelumnya kita perlu mengimplement function untuk kalkulasi currency (mata uang). Buka context shopping cart di `lib/learn_phoenix/shopping_cart.ex` dan tambahkan function ini:
+
+```elixir
+  def total_item_price(%CartItem{} = item) do
+    Decimal.mult(item.product.price, item.quantity)
+  end
+
+  def total_cart_price(%Cart{} = cart) do
+    Enum.reduce(cart.items, 0, fn item, acc ->
+      item
+      |> total_item_price()
+      |> Decimal.add(acc)
+    end)
+  end
+```
+
+Kita mengimplement `total_item_price/1` yang menerima sebuah struct `%CartItem{}`. Untuk mengkalkulasi total price, kita ambil preloaded harga product dan mengalikannya dengan item quantity. Kita menggunakan `Decimal.mult/2` untuk mengambil desimal dari struct currency dan mengalikannya dengan presisi yang proper. Sama juga untuk perkalian total cart price, kita mengimplement sebuah function `total_cart_price/1` yang menerima cart dan menjumlahkan preloaded harga product untuk item di dalam cart. Kita sekali lagi menggunakan function `Decimal` untuk mejumlahkan decimal struct bersama-sama.
+
+Sekarang kita dapat mengkalkulasi total price, mari kita coba buka `http://localhost:4000/cart` dan kamu harusnya sudah melihat item pertama di dalam cart. Kembali lagi ke halaman product dan click "add to cart" akan menampilkan upsert. Quantitinya sekarang harusnya menjadi 2.
+
+Halaman cart sekarang harusnya hampir komplit, Tapi submit form akan error dikit.
+
+```elixir
+Request: POST /cart
+** (exit) an exception was raised:
+    ** (UndefinedFunctionError) function LearnPhoenixWeb.CartController.update/2 is undefined or private
+```
+
+Mari kita kembali ke `CartController` di `lib/learn_phoenix/controllers/cart_controller.ex` dan implement update action:
+
+```elixir
+  def update(conn, %{"cart" => cart_params}) do
+    case ShoppingCart.update_cart(conn.assigns.cart, cart_params) do
+      {:ok, _cart} ->
+        redirect(conn, to: ~p"/cart")
+
+      {:error, _changeset} ->
+        conn
+        |> put_flash(:error, "There was an error updating your cart")
+        |> redirect(to: ~p"/cart")
+    end
+  end
+```
+
+Kita mulai dengan mengambil cart params dari form submit. Kemudian, kita panggil function `ShoppingCart.update_cart/2` yang ditambahkan oleh generator context. Kita perlu membuat beberapa perubahan ke function ini, tapi interfacenya udah oke. Jika update berhasil, kita mengarahkan kembali ke cart page. Kalo tidak kita menampilkan sebuah error message dan mengirim user kembali ke cart page untuk memperbaiki kesalahannya. Di luar kebiasaan, function `ShoppingCart.update_cart/2` hanya memperhatikan dirinya sendiri dengan mengcasting cart params ke sebuah changeset dan mengupdatenya terhadap Repo kita. Untuk tujuan kita, kita sekarang membutuhkannya untuk menghandle nested cart item associations, dan paling penting, bisnis logic untuk bagaimana menghandle quantity update seperti zero-quantity items dihapus dari cart.
+
+Kembali lagi ke context shopping cart di `lib/learn_phoenix/shopping_cart.ex` dan replace `update_cart/2` dengan implementasi berikut:
+
+```elixir
+  def update_cart(%Cart{} = cart, attrs) do
+    changeset =
+      cart
+      |> Cart.changeset(attrs)
+      |> Ecto.Changeset.cast_assoc(:items, with: &CartItem.changeset/2)
+
+    Ecto.Multi.new()
+    |> Ecto.Multi.update(:cart, changeset)
+    |> Ecto.Multi.delete_all(:discarded_items, fn %{cart: cart} ->
+      from(i in CartItem, where: i.cart_id == ^cart.id and i.quantity == 0)
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{cart: cart}} -> {:ok, cart}
+      {:error, :cart, changeset, _changes_so_far} -> {:error, changeset}
+    end
+  end
+```
+
+Kita mulai seperti bagaimana di luar kebiasaan kode kita dimulai, kita mengambil cart struct dan cast user input ke sebuah cart changeset, kecuali kali ini kita menggunakan `Ecto.Changeset.cast_assoc/3` untuk cast nested item data ke changeset `CartItem`. Masih ingat dengan `<.input_for />` di template form cart? Itu adalah ID tersembunyi yang memungkinkan Ecto `cart_assoc` untuk memetakan item data kembali ke item association di cart. Kemudian kita menggunakan `Ecto.Multi.new/0` yang mungkin belum pernah kita lihat sebelumnya. Ecto `Multi` adalah sebuah fitur yang memungkinkan pendefinisian sebuah rantai nama operasi yang akhirnya kita eksekusi di dalam sebuah database transaction. Masing-masing operasi di dalam "multi chain" menerima values dari langkah sebelumnya dan mengeksekusi sampai sebuah kegagalan terjadi. Ketika sebuah operasi gagal, transaction rolled back dan sebuah error diberikan, kalo ga transaction akan dicommit.
+
+Untuk operasi multi kita, kita mulai dengan mengeluarkan sebuah update dari cart kita, yang kita namakan `:cart`. Setelah cart update dikeluarkan, kita melakukan sebuah multi operasi `delete_all`, yang mengambil cart yang diupdate dan mengaplikasikannya ke logic zero-quantity. Kita memotong/menghapus semua items di dalam cart dengan zero quantity dengan mengembalikan sebuah ecto query yang mencari semua cart items di cart ini yang quantitynya nol. Panggil `Repo.transaction/1` dengan multi kita yang akan mengeksekusi operasi ini di sebuah transaction baru dan kita mengembalikan sukses atau gagal ke pemanggil seperti function aslinya.
+
+Kita buka lagi browser dan coba lagi. Tambahkan sebuah product ke cart kita, update quantities dan lihat values yang berubah seiring dengan kalkulasi harganya. Setting quantity manapun menjadi 0 akan menjadikannya dihapus cart. Keren kan!!!
+
+**Adding an Orders context**
