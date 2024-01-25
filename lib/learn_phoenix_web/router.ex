@@ -51,6 +51,8 @@ defmodule LearnPhoenixWeb.Router do
     resources "/cart_items", CartItemController, only: [:create, :delete]
     get "/cart", CartController, :show
     put "/cart", CartController, :update
+
+    resources "/orders", OrderController, only: [:create, :show]
     # resources "/users", UserController
     # resources "/posts", PostController, only: [:index, :show]
     # resources "/comments", CommentController, except: [:delete]

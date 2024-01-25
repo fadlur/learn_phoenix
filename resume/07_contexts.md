@@ -1088,3 +1088,179 @@ Untuk operasi multi kita, kita mulai dengan mengeluarkan sebuah update dari cart
 Kita buka lagi browser dan coba lagi. Tambahkan sebuah product ke cart kita, update quantities dan lihat values yang berubah seiring dengan kalkulasi harganya. Setting quantity manapun menjadi 0 akan menjadikannya dihapus cart. Keren kan!!!
 
 **Adding an Orders context**
+Dengan `Catalog` dan `ShoppingCart` context, kita dapat melihat langsung bagaimana module dan nama function menghasilkan kode yang jelas dan mudah dimaintenance. Urutan terakhir adalah mengijinkan user untuk melakukan checkout. Kita tidak akan terlalu jauh sampai integrasi payment process atau melengkapi order, tapi kita akan memulai ke arah situ. Seperti sebelumnya, kita perlu memutuskan di mana kode untuk melengkapi sebuah order harus ada. Apakah menjadi bagian Catalog? Pastinya tidak, tapi bagaimana kalau di shopping cart? Shopping carts terhubung dengan orders, bagaimanapun, user harus menambahkan item di dalam order untuk membeli produk, tapi haruskan proses checkout dikelompokkan di sini?
+
+Jika kita berhenti dan mempertimbangkan proses order, kita akan melihat bahwa order melibatkan data yang terkait, tetapi jelas berbeda dari isi keranjang. Selain itu, aturan bisnis di sekitar proses checkout jauh berbeda dengan carting. Sebagai contoh, kita mungkin mengijinkan seorang user untuk menambahkan sebuah item kembali ke keranjang mereka, tapi kita tidak dapat mengijinkan sebuah order yang tidak memiliki inventory (item) untuk diselesaikan. Selain itu, kita perlu mengambil informasi produk ketika sebuah order selesai, seperti harga item saat transaksi pembayaran. Ini penting karena sebuah produk mungkin berumbah di kemudian hari, tapi data item di order kita harus selalu kita simpan dan tampilkan harga yang kita kenakan waktu pembelian. Untuk alasan ini, kita dapat memulai untuk melihat bahwa order dapat berdiri sendiri dengan data dan aturan bisnis sendiri.
+
+Beri nama dengan bijaksana, `Orders` bisa mendefinisikan scope dari context kita, ayo kita mulai lagi dengan mengambil keuntungan dari context generator. Jalankan perintah ini di console:
+
+```elixir
+mix phx.gen.context Orders Order orders user_uuid:uuid total_price:decimal
+
+* creating lib/learn_phoenix/orders/order.ex
+* creating priv/repo/migrations/20240125141005_create_orders.exs
+* creating lib/learn_phoenix/orders.ex
+* injecting lib/learn_phoenix/orders.ex
+* creating test/learn_phoenix/orders_test.exs
+* injecting test/learn_phoenix/orders_test.exs
+* creating test/support/fixtures/orders_fixtures.ex
+* injecting test/support/fixtures/orders_fixtures.ex
+
+Remember to update your repository by running migrations:
+
+    $ mix ecto.migrate
+```
+
+Kita telah membuat context `Orders`. Kita menambahkan sebuah field `user_uuid` untuk kita asosiasikan ke placeholder current user ke order, bersama dengan kolom `total_price`. Selanjutnya mari kita buka migration order di `priv/repo/migrations/*_create_orders.exs` dan buat perubahan berikut:
+
+```elixir
+  def change do
+    create table(:orders) do
+      add :user_uuid, :uuid
+-     add :total_price, :decimal
++     add :total_price, :decimal, precision: 15, scale: 6, null: false
+
+      timestamps()
+    end
+  end
+```
+
+Seperti yang telah kita lakukan, kita memberi presisi yang pantas dan skala untuk kolom decimal yang akan mengijinkan kita untuk menyimpan mata uang tanpa kehilangan presisi. Kita juga menambahkan sebuah not-null constraint untuk memaksa semua orders mempunyai sebuah harga.
+
+Table orders sendiri tidak menyimpan banyak informasi, tapi kita tahu kita perlu menyimpan informasi produk saat order dilakukan. Untuk itu, kita akan menambahkan struct tambahan untuk context ini dengan nama `LineItem`. Line item akan menangkap harga dari produk saat transaksi pembayaran dilakukan. Jalan kan command berikut:
+
+```elixir
+mix phx.gen.context Orders LineItem order_line_items \
+price:decimal quantity:integer \
+order_id:references:orders product_id:references:products
+
+You are generating into an existing context.
+
+* creating lib/learn_phoenix/orders/line_item.ex
+* creating priv/repo/migrations/20240125141752_create_order_line_items.exs
+* injecting lib/learn_phoenix/orders.ex
+* injecting test/learn_phoenix/orders_test.exs
+* injecting test/support/fixtures/orders_fixtures.ex
+
+Remember to update your repository by running migrations:
+
+    $ mix ecto.migrate
+```
+
+Kita menggunakan `phx.gen.context` untuk membuat `LineItem` Ecto schema dan meng-inject function tambahan ke context order. Seperti sebelumnya, mari kita modifikasi migration di `priv/migrations/*_create_order_line_items.exs` dan buat decimal seperti berikut:
+
+```elixir
+  def change do
+    create table(:order_line_items) do
+-     add :price, :decimal
++     add :price, :decimal, precision: 15, scale: 6, null: false
+      add :quantity, :integer
+      add :order_id, references(:orders, on_delete: :nothing)
+      add :product_id, references(:products, on_delete: :nothing)
+
+      timestamps()
+    end
+
+    create index(:order_line_items, [:order_id])
+    create index(:order_line_items, [:product_id])
+  end
+```
+
+Setelah selesai dengan migration, sekarang sambungkan orders kita dan line items associations di `lib/learn_phoenix/orders/order.ex`:
+
+```elixir
+  schema "orders" do
+    field :total_price, :decimal
+    field :user_uuid, Ecto.UUID
+
++   has_many :line_items, Hello.Orders.LineItem
++   has_many :products, through: [:line_items, :product]
+
+    timestamps()
+  end
+```
+
+Kita menggunakan `has_many :line_items` untuk mengasosiasikan orders dan line items, seperti yang kita lihat sebelumnya. Kemudian kita menggunakan fitur `:through` dari `has_many`, yang mengijinkan kita untuk menginstruksikan ecto bagaimana mengasosiasikan resources lintas relationship lainnya. Di kasus ini, kita dapat mengasosiasikan products dari sebuah order dengan mencari semua products melalui line items yang telah diasosikan. Kemudian, mari kita sambungkan asosiasi di arah lainnya di `lib/learn_phoenix/orders/line_item.ex`:
+
+```elixir
+  schema "order_line_items" do
+    field :price, :decimal
+    field :quantity, :integer
+-   field :order_id, :id
+-   field :product_id, :id
+
++   belongs_to :order, Hello.Orders.Order
++   belongs_to :product, Hello.Catalog.Product
+
+    timestamps()
+  end
+```
+
+Kita menggunakan `belongs_to` untuk mengasosiasikan line items ke orders dan products. Sekarang, kita dapat mulai mengintegrasikan web interface ke proses order kita. Buka router `lib/learn_phoenix/router.ex` dan tambahkan baris berikut:
+
+```elixir
+  scope "/", HelloWeb do
+    pipe_through :browser
+
+    ...
++   resources "/orders", OrderController, only: [:create, :show]
+  end
+```
+
+Sekarang dapat kita migrate:
+
+```elixir
+21:32:20.784 [info] == Running 20240125141005 LearnPhoenix.Repo.Migrations.CreateOrders.change/0 forward
+
+21:32:20.786 [info] create table orders
+
+21:32:20.830 [info] == Migrated 20240125141005 in 0.0s
+
+21:32:20.849 [info] == Running 20240125141752 LearnPhoenix.Repo.Migrations.CreateOrderLineItems.change/0 forward
+
+21:32:20.849 [info] create table order_line_items
+
+21:32:20.861 [info] create index order_line_items_order_id_index
+
+21:32:20.864 [info] create index order_line_items_product_id_index
+
+21:32:20.866 [info] == Migrated 20240125141752 in 0.0s
+```
+
+Sebelum kita merender informasi tentang order kita, kita perlu memastikan order kita datanya telah dikumpulkan dan dapat dilihat oleh current user. Buka context order di `lib/learn_phoenix/orders.ex` dan replace function `get_order!/1` dengan `get_order!/2` yang baru:
+
+```elixir
+  def get_order!(user_uuid, id) do
+    Order
+    |> Repo.get_by!(id: id, user_uuid: user_uuid)
+    |> Repo.preload([line_items: [:product]])
+  end
+```
+
+Kita tulis ulang function untuk menerima sebuah user UUID dan query repo kita untuk sebuah order yang cocok dengan user ID untuk sebuah order Id yang diberikan. Kemudian kita mengumpulkan order dengan preloading line item dan product assosiasinya.
+
+Untuk melengkapi sebuah order, halaman cart kita mengeluarkan sebuah POST ke action `OrderController.create`, tapi kita perlu mengimplement operasi dan logic untuk melengkapi sebuah order. Seperti sebelumnya, kita akan mulai di web interface. Buat sebuah file baru di `lib/learn_phoenix/controllers/order_controller.ex` dan edit menjadi seperti berikut:
+
+```elixir
+
+defmodule LearnPhoenixWeb.OrderController do
+  use LearnPhoenixWeb, :controller
+
+  alias LearnPhoenix.Orders
+
+  def create(conn, _) do
+    case Orders.complete_order(conn.assigns.cart) do
+      {:ok, order} ->
+        conn
+        |> put_flash(:info, "Order created successfully.")
+        |> redirect(to: ~p"/orders/#{order}")
+
+      {:error, _reason} ->
+        conn
+        |> put_flash(:error, "There was an error processing your order")
+        |> redirect(to: ~p"/cart")
+    end
+  end
+end
+
+```
