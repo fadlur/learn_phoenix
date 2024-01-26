@@ -4,9 +4,35 @@ defmodule LearnPhoenix.Orders do
   """
 
   import Ecto.Query, warn: false
+  alias LearnPhoenix.ShoppingCart
   alias LearnPhoenix.Repo
 
   alias LearnPhoenix.Orders.Order
+
+  def complete_order(%ShoppingCart.Cart{} = cart) do
+    line_items =
+      Enum.map(cart.items, fn item ->
+        %{product_id: item.product_id, price: item.product.price, quantity: item.quantity}
+      end)
+
+    order =
+      Ecto.Changeset.change(%Order{},
+        user_uuid: cart.user_uuid,
+        total_price: ShoppingCart.total_cart_price(cart),
+        line_items: line_items
+      )
+
+    Ecto.Multi.new()
+    |> Ecto.Multi.insert(:order, order)
+    |> Ecto.Multi.run(:prune_cart, fn _repo, _changes ->
+      ShoppingCart.prune_cart_items(cart)
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{order: order}} -> {:ok, order}
+      {:error, name, value, _changes_so_far} -> {:error, {name, value}}
+    end
+  end
 
   @doc """
   Returns the list of orders.

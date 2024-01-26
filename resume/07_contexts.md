@@ -1264,3 +1264,130 @@ defmodule LearnPhoenixWeb.OrderController do
 end
 
 ```
+
+Kita telah menulis action `create` untuk memanggil sebuah function `Orders.complete_order/1` yang telah diimplementasi. Kode kita secara teknis "membuat" sebuah order, tapi penting untuk mundur sejenak dan mempertimbahkan penamaan interfacemu. Aksi dari menyelesaikan sebuah order sangat penting di sistem kita. Uang berpindah di sebuah transaksi, barang fisik bisa secara otomatis dikirim, dll. Sebuah operasi pantas lebih baik, function name yang lebih jelas, seperti `complete_order`. Jika order telah selesai kita mengarahkan ke halaman show, kalau nggak sebuah flash error ditampilkan seperti kita mengarahkan kembali ke halaman cart.
+
+Di sini juga sebuah kesempatan bagus untuk menyoroti bahwa konteks dapat secara natural bekerja dengan data yang didefinisikan oleh konteks yang lain juga. Ini akan umum dengan data yang digunakan melalui aplikasi, seperti cart di sini (data ini dapat juga current user atau current project, dan seterusnya, tergantung projectmu).
+
+Sekarang kita dapat mengimplementasi function `Orders.complete_order/1` kita. Untuk menyelesaikan sebuah order, tugas kita akan membutuhkan sebuah beberapa operasi:
+
+1. Sebuah data order baru akan disimpan dengan total price dari order tersebut.
+2. Semua items di cart harus ditransformasikan ke dalam line items order dengan quantity dan harga waktu transaksi.
+3. Setelah berhasil menyisipkan order (dan payment), items harus dihapus dari cart.
+
+Dari requirement di atas, kita dapat mmulai melihat bagaimana sebuah generic function `create_order` tidak dapat memotongnya. Mari kita implement function baru ini di `lib/learn_phoenix/orders.ex`:
+
+```elixir
+  alias LearnPhoenix.Orders.LineItem
+  alias LearnPhoenix.ShoppingCart
+
+  def complete_order(%ShoppingCart.Cart{} = cart) do
+    line_items =
+      Enum.map(cart.items, fn item ->
+        %{product_id: item.product_id, price: item.product.price, quantity: item.quantity}
+      end)
+
+    order =
+      Ecto.Changeset.change(%Order{},
+        user_uuid: cart.user_uuid,
+        total_price: ShoppingCart.total_cart_price(cart),
+        line_items: line_items
+      )
+
+    Ecto.Multi.new()
+    |> Ecto.Multi.insert(:order, order)
+    |> Ecto.Multi.run(:prune_cart, fn _repo, _changes ->
+      ShoppingCart.prune_cart_items(cart)
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{order: order}} -> {:ok, order}
+      {:error, name, value, _changes_so_far} -> {:error, {name, value}}
+    end
+  end
+```
+
+Kita mulai dengan memetakan (mapping) `%ShoppingCart.CartItem{}` di shopping cart kita ke sebuah map dari struct order line items. Tugas dari order line item record adalah untuk mengambil harga dari product saat transaksi pembayaran, sehingga kita mereferensi harga product di sini. Kemudian, kita membuat sebuah order changeset dengan `Ecto.Changeset.change/2` dan mengasosiasikan user UUID kita, mengatur kalkulasi total harga, dan menempatkan order line item ke changeset. Dengan sebuah changeset order baru telah kita sisipkan, kita dapat menggunakan `Ecto.Multi` untuk mengeksekusi operasi kita di dalam transaksi database. Kita mulai dengan menyisipkan order, diikuti oleh operasi `run`. function `Ecto.Multi.run/3` mengijinkan kita untuk menjalankan kode apapun di dalam function yang harus mengembalikan baik `{:ok, result}` atau error, yang berhenti dan memutar kembali transaksi yang terjadi. Di sini kita cukup memanggil shopping cart context dan memintanya untuk menghapus semua items di dalam cart. Menjalankan transaksi akan mengeksekusi multi seperti sebelumnya dan mengembalikan result ke pemanggil.
+
+Untuk menutup penyelesaikan order, kita perlu mengimplement function `ShoppingCart.prunt_cart_items/1` di `lib/learn_phoenix/shopping_cart.ex`:
+
+```elixir
+  def prune_cart_items(%Cart{} = cart) do
+    {_, _} = Repo.delete_all(from(i in CartItem, where: i.cart_id == ^cart.id))
+    {:ok, reload_cart(cart)}
+  end
+```
+
+Function baru kita menerima struct cart dan mengeluarkan sebuah `Repo.delete_all` yang menerima sebuah query dari semua items yang disediakan oleh cart. Kita mengembalikan sebuah hasil sukses (success result) dengan reloading cart yang telah dikosongkan ke pemanggil. Setelah context selesai, kita sekarang perlu menunjukkan ke user order yang telah selesai. Kembali lagi ke order controller dan tambahkan action `show/2`:
+
+```elixir
+  def show(conn, %{"id" => id}) do
+    order = Orders.get_order!(conn.assigns.current_uuid, id)
+    render(conn, :show, order: order)
+  end
+```
+
+Kita telah menambahkan action show untuk melewatkan `conn.assigns.current_uuid` ke `get_order!` yang mengotorisasi orders untuk dapat dilihat hanya oleh pemilik order. Kemudian, kita dapat mengimplementasi view dan template. Buat sebuah view file baru `lib/learn_phoenix_web/controllers/order_html.ex` dengan isi seperti berikut:
+
+```elixir
+defmodule LearnPhoenixWeb.OrderHTML do
+  use LearnPhoenixWeb, :html
+
+  embed_templates "order_html/*"
+end
+
+```
+
+Kemudian kita dapat membuat template di `lib/learn_phoenix_web/controllers/order_html/show.html.heex`:
+
+```elixir
+<.header>
+  Thank you for your order!
+  <:subtitle>
+     <strong>User uuid: </strong><%= @order.user_uuid %>
+  </:subtitle>
+</.header>
+
+<.table id="items" rows={@order.line_items}>
+  <:col :let={item} label="Title"><%= item.product.title %></:col>
+  <:col :let={item} label="Quantity"><%= item.quantity %></:col>
+  <:col :let={item} label="Price">
+    <%= LearnPhoenixWeb.CartHTML.currency_to_str(item.price) %>
+  </:col>
+</.table>
+
+<strong>Total price:</strong>
+<%= LearnPhoenixWeb.CartHTML.currency_to_str(@order.total_price) %>
+
+<.back navigate={~p"/products"}>Back to products</.back>
+
+```
+
+Untuk menampilkan order yang telah selesai, kita tampilkan order user, diikuti oleh line items dengan title product, quantity, dan harga(price) waktu transaksi bersama dengan total price.
+
+Tambahan terakhir, kita tambahkan "complete order" button ke halaman cart kita utnuk mengijinkan menyelesaikan order. Tambahkan button ke <.header> dari cart show template di `lib/learn_phoenix_web/controllers/cart_html/show.html.heex`:
+
+```elixir
+  <.header>
+    My Cart
++    <:actions>
++      <.link href={~p"/orders"} method="post">
++        <.button>Complete order</.button>
++      </.link>
++    </:actions>
+  </.header>
+```
+
+Kita telah menambahkan sebuah link dengan `method="post"` untuk mengirim POST request ke action `OrderController.create`. Jika kita melihat ke belakang ke halaman cart `http://localhost:4000/cart` dan menyelesaikan order, kita akan disambut dengan template kita:
+
+```elixir
+Thank you for your order!
+
+User uuid: 08964c7c-908c-4a55-bcd3-9811ad8b0b9d
+Title                   Quantity Price
+Metaprogramming Elixir  2        $15.00
+
+Total price: $30.00
+```
+
+Kita belum menambahkan payments, tapi kita dapat melihat bagaiman `ShoppingCart` dan `Orders` context mengarahkan kita ke solusi yang dapat dimaintenance.
