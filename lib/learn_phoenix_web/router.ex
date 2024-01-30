@@ -76,14 +76,17 @@ defmodule LearnPhoenixWeb.Router do
   # end
 
   # scope "/api", LearnPhoenixWeb.Api, as: :api do
-  #   pipe_through :api
+  scope "/api", LearnPhoenixWeb do
+    pipe_through :api
 
-  #   scope "/v1", V1, as: :v1 do
-  #     resources "/images", ImageController
-  #     resources "/reviews", ReviewController
-  #     resources "/users", UserController
-  #   end
-  # end
+    # scope "/v1", V1, as: :v1 do
+    #   resources "/images", ImageController
+    #   resources "/reviews", ReviewController
+    #   resources "/users", UserController
+    # end
+
+    resources "/urls", UrlController, except: [:new, :edit]
+  end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
   if Application.compile_env(:learn_phoenix, :dev_routes) do
